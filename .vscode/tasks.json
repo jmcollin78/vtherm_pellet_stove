@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Home Assistant on port 8123",
+            "type": "shell",
+            "command": "hass -c .devcontainer/ --debug",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run tests",
+            "type": "shell",
+            "command": "pytest tests/ -vv",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run tests with coverage",
+            "type": "shell",
+            "command": "pytest tests/ -vv --cov=custom_components/vtherm_pellet_stove --cov-report=term-missing",
+            "problemMatcher": []
+        },
+        {
+            "label": "Install dependencies",
+            "type": "shell",
+            "command": "pip install --user -r requirements_dev.txt && pip install --user -r requirements_test.txt",
+            "problemMatcher": []
+        },
+        {
+            "label": "Upgrade Home Assistant to latest",
+            "type": "shell",
+            "command": "pip install --user --upgrade homeassistant",
+            "problemMatcher": []
+        }
+    ]
+}
