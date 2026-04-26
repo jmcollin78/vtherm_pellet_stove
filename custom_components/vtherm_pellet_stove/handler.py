@@ -93,9 +93,10 @@ class PelletRegulationHandler:
             force,
         )
 
-    async def on_state_changed(self, changed: bool) -> None:
+    async def on_state_changed(self, changed: bool = True) -> None:
         """React to a thermostat state change.
 
+        VTherm calls this without argument; the default value ensures compatibility.
         Sprint 2: request a fresh control_heating iteration.
         """
         _LOGGER.debug(

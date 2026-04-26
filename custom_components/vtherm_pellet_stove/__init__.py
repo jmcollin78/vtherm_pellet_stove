@@ -79,6 +79,7 @@ async def _reload_pellet_vtherms(
     }
 
     reload_tasks = []
+    reloaded_entry_ids: list[str] = []
     for entry in hass.config_entries.async_entries(VT_DOMAIN):
         if entry.data.get(CONF_PROP_FUNCTION) != PROP_FUNCTION_PELLET_REGULATION:
             continue
@@ -91,10 +92,33 @@ async def _reload_pellet_vtherms(
             # Global defaults changed: skip VTherms that have an override entry.
             continue
 
+        reloaded_entry_ids.append(entry.entry_id)
         reload_tasks.append(hass.config_entries.async_reload(entry.entry_id))
 
     if reload_tasks:
         await asyncio.gather(*reload_tasks)
+
+        # VT's reload may destroy and recreate the VThermAPI instance (when the
+        # last VT config entry is removed by remove_entry).  The new API starts
+        # with an empty algorithm registry, so our factory is lost.
+        #
+        # Fix: re-register the factory on the (possibly new) API, then retry
+        # init_vtherm_links for each reloaded entry so that any entity that
+        # previously raised "Unknown proportional function" gets a second chance.
+        data = _ensure_domain_data(hass)
+        data.pop(DATA_FACTORY_REGISTERED, None)
+        if _register_factory(hass):
+            api = VThermAPI.get_vtherm_api(hass)
+            if api is not None and hasattr(api, "init_vtherm_links"):
+                for entry_id in reloaded_entry_ids:
+                    try:
+                        await api.init_vtherm_links(entry_id)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        _LOGGER.warning(
+                            "Could not re-initialize VTherm entry %s after reload: %s",
+                            entry_id,
+                            exc,
+                        )
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
