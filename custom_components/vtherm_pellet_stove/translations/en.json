@@ -1,72 +1,72 @@
 {
-  "title": "Versatile Thermostat Pellet Stove",
-  "config": {
-    "step": {
-      "global": {
-        "title": "Pellet Stove — global defaults",
-        "data": {
-          "hysteresis_on": "Heating start threshold (°C below target)",
-          "hysteresis_off": "Heating stop threshold (°C above target)",
-          "min_on_percent": "on_percent value when OFF (0.0–1.0)",
-          "max_on_percent": "on_percent value when ON (0.0–1.0)",
-          "min_on_duration_min": "Minimum burn duration (minutes)",
-          "min_off_duration_min": "Minimum off duration (minutes)",
-          "cooldown_duration_min": "Cooldown added to min_off (minutes)",
-          "safety_room_temp": "Safety cut-off room temperature (°C)",
-          "power_control_enabled": "Enable power level control",
-          "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
-          "power_default_level_index": "Default power level index",
-          "power_boost_enabled": "Enable boost after setpoint increase",
-          "power_boost_duration_min": "Boost duration (minutes)"
+    "title": "Versatile Thermostat Pellet Stove",
+    "config": {
+        "step": {
+            "global": {
+                "title": "Pellet Stove — global defaults",
+                "data": {
+                    "hysteresis_on": "Heating start threshold (°C below target)",
+                    "hysteresis_off": "Heating stop threshold (°C above target)",
+                    "min_on_percent": "on_percent value when OFF (0.0–1.0)",
+                    "max_on_percent": "on_percent value when ON (0.0–1.0)",
+                    "min_on_duration_min": "Minimum burn duration (minutes)",
+                    "min_off_duration_min": "Minimum off duration (minutes)",
+                    "cooldown_duration_min": "Cooldown added to min_off (minutes)",
+                    "safety_room_temp": "Safety cut-off room temperature (°C)",
+                    "power_control_enabled": "Enable power level control",
+                    "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost after setpoint increase",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            },
+            "thermostat": {
+                "title": "Pellet Stove — per thermostat",
+                "data": {
+                    "target_vtherm_unique_id": "Target VTherm entity",
+                    "hysteresis_on": "Heating start threshold (°C below target)",
+                    "hysteresis_off": "Heating stop threshold (°C above target)",
+                    "min_on_percent": "on_percent value when OFF (0.0–1.0)",
+                    "max_on_percent": "on_percent value when ON (0.0–1.0)",
+                    "min_on_duration_min": "Minimum burn duration (minutes)",
+                    "min_off_duration_min": "Minimum off duration (minutes)",
+                    "cooldown_duration_min": "Cooldown added to min_off (minutes)",
+                    "safety_room_temp": "Safety cut-off room temperature (°C)",
+                    "power_control_enabled": "Enable power level control",
+                    "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost after setpoint increase",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            }
+        },
+        "abort": {
+            "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed."
+        },
+        "error": {
+            "invalid_entity": "The selected climate entity cannot be linked to a VT unique identifier."
         }
-      },
-      "thermostat": {
-        "title": "Pellet Stove — per thermostat",
-        "data": {
-          "target_vtherm_unique_id": "Target VTherm entity",
-          "hysteresis_on": "Heating start threshold (°C below target)",
-          "hysteresis_off": "Heating stop threshold (°C above target)",
-          "min_on_percent": "on_percent value when OFF (0.0–1.0)",
-          "max_on_percent": "on_percent value when ON (0.0–1.0)",
-          "min_on_duration_min": "Minimum burn duration (minutes)",
-          "min_off_duration_min": "Minimum off duration (minutes)",
-          "cooldown_duration_min": "Cooldown added to min_off (minutes)",
-          "safety_room_temp": "Safety cut-off room temperature (°C)",
-          "power_control_enabled": "Enable power level control",
-          "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
-          "power_default_level_index": "Default power level index",
-          "power_boost_enabled": "Enable boost after setpoint increase",
-          "power_boost_duration_min": "Boost duration (minutes)"
-        }
-      }
     },
-    "abort": {
-      "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed."
-    },
-    "error": {
-      "invalid_entity": "The selected climate entity cannot be linked to a VT unique identifier."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Pellet Stove — options",
-        "data": {
-          "hysteresis_on": "Heating start threshold (°C below target)",
-          "hysteresis_off": "Heating stop threshold (°C above target)",
-          "min_on_percent": "on_percent value when OFF (0.0–1.0)",
-          "max_on_percent": "on_percent value when ON (0.0–1.0)",
-          "min_on_duration_min": "Minimum burn duration (minutes)",
-          "min_off_duration_min": "Minimum off duration (minutes)",
-          "cooldown_duration_min": "Cooldown added to min_off (minutes)",
-          "safety_room_temp": "Safety cut-off room temperature (°C)",
-          "power_control_enabled": "Enable power level control",
-          "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
-          "power_default_level_index": "Default power level index",
-          "power_boost_enabled": "Enable boost after setpoint increase",
-          "power_boost_duration_min": "Boost duration (minutes)"
+    "options": {
+        "step": {
+            "init": {
+                "title": "Pellet Stove — options",
+                "data": {
+                    "hysteresis_on": "Heating start threshold (°C below target)",
+                    "hysteresis_off": "Heating stop threshold (°C above target)",
+                    "min_on_percent": "on_percent value when OFF (0.0–1.0)",
+                    "max_on_percent": "on_percent value when ON (0.0–1.0)",
+                    "min_on_duration_min": "Minimum burn duration (minutes)",
+                    "min_off_duration_min": "Minimum off duration (minutes)",
+                    "cooldown_duration_min": "Cooldown added to min_off (minutes)",
+                    "safety_room_temp": "Safety cut-off room temperature (°C)",
+                    "power_control_enabled": "Enable power level control",
+                    "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost after setpoint increase",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            }
         }
-      }
     }
-  }
 }

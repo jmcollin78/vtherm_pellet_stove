@@ -1,72 +1,72 @@
 {
-  "title": "Versatile Thermostat Poêle à Pellets",
-  "config": {
-    "step": {
-      "global": {
-        "title": "Poêle à Pellets — paramètres globaux",
-        "data": {
-          "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
-          "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
-          "min_on_percent": "on_percent en arrêt (0.0–1.0)",
-          "max_on_percent": "on_percent en chauffe (0.0–1.0)",
-          "min_on_duration_min": "Durée minimale de chauffe (minutes)",
-          "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
-          "cooldown_duration_min": "Refroidissement après extinction (minutes)",
-          "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
-          "power_control_enabled": "Activer le pilotage du niveau de puissance",
-          "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
-          "power_default_level_index": "Index du niveau de puissance par défaut",
-          "power_boost_enabled": "Activer le boost après hausse de consigne",
-          "power_boost_duration_min": "Durée du boost (minutes)"
+    "title": "Versatile Thermostat Poêle à Pellets",
+    "config": {
+        "step": {
+            "global": {
+                "title": "Poêle à Pellets — paramètres globaux",
+                "data": {
+                    "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
+                    "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt (0.0–1.0)",
+                    "max_on_percent": "on_percent en chauffe (0.0–1.0)",
+                    "min_on_duration_min": "Durée minimale de chauffe (minutes)",
+                    "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
+                    "cooldown_duration_min": "Refroidissement après extinction (minutes)",
+                    "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
+                    "power_control_enabled": "Activer le pilotage du niveau de puissance",
+                    "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
+                    "power_default_level_index": "Index du niveau de puissance par défaut",
+                    "power_boost_enabled": "Activer le boost après hausse de consigne",
+                    "power_boost_duration_min": "Durée du boost (minutes)"
+                }
+            },
+            "thermostat": {
+                "title": "Poêle à Pellets — par thermostat",
+                "data": {
+                    "target_vtherm_unique_id": "Thermostat VTherm cible",
+                    "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
+                    "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt (0.0–1.0)",
+                    "max_on_percent": "on_percent en chauffe (0.0–1.0)",
+                    "min_on_duration_min": "Durée minimale de chauffe (minutes)",
+                    "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
+                    "cooldown_duration_min": "Refroidissement après extinction (minutes)",
+                    "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
+                    "power_control_enabled": "Activer le pilotage du niveau de puissance",
+                    "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
+                    "power_default_level_index": "Index du niveau de puissance par défaut",
+                    "power_boost_enabled": "Activer le boost après hausse de consigne",
+                    "power_boost_duration_min": "Durée du boost (minutes)"
+                }
+            }
+        },
+        "abort": {
+            "single_instance_allowed": "Une seule entrée de configuration globale est autorisée."
+        },
+        "error": {
+            "invalid_entity": "L'entité climate sélectionnée ne peut pas être liée à un identifiant VTherm."
         }
-      },
-      "thermostat": {
-        "title": "Poêle à Pellets — par thermostat",
-        "data": {
-          "target_vtherm_unique_id": "Thermostat VTherm cible",
-          "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
-          "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
-          "min_on_percent": "on_percent en arrêt (0.0–1.0)",
-          "max_on_percent": "on_percent en chauffe (0.0–1.0)",
-          "min_on_duration_min": "Durée minimale de chauffe (minutes)",
-          "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
-          "cooldown_duration_min": "Refroidissement après extinction (minutes)",
-          "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
-          "power_control_enabled": "Activer le pilotage du niveau de puissance",
-          "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
-          "power_default_level_index": "Index du niveau de puissance par défaut",
-          "power_boost_enabled": "Activer le boost après hausse de consigne",
-          "power_boost_duration_min": "Durée du boost (minutes)"
-        }
-      }
     },
-    "abort": {
-      "single_instance_allowed": "Une seule entrée de configuration globale est autorisée."
-    },
-    "error": {
-      "invalid_entity": "L'entité climate sélectionnée ne peut pas être liée à un identifiant VTherm."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Poêle à Pellets — options",
-        "data": {
-          "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
-          "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
-          "min_on_percent": "on_percent en arrêt (0.0–1.0)",
-          "max_on_percent": "on_percent en chauffe (0.0–1.0)",
-          "min_on_duration_min": "Durée minimale de chauffe (minutes)",
-          "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
-          "cooldown_duration_min": "Refroidissement après extinction (minutes)",
-          "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
-          "power_control_enabled": "Activer le pilotage du niveau de puissance",
-          "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
-          "power_default_level_index": "Index du niveau de puissance par défaut",
-          "power_boost_enabled": "Activer le boost après hausse de consigne",
-          "power_boost_duration_min": "Durée du boost (minutes)"
+    "options": {
+        "step": {
+            "init": {
+                "title": "Poêle à Pellets — options",
+                "data": {
+                    "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
+                    "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt (0.0–1.0)",
+                    "max_on_percent": "on_percent en chauffe (0.0–1.0)",
+                    "min_on_duration_min": "Durée minimale de chauffe (minutes)",
+                    "min_off_duration_min": "Durée minimale d'arrêt (minutes)",
+                    "cooldown_duration_min": "Refroidissement après extinction (minutes)",
+                    "safety_room_temp": "Température de coupure sécurité ambiante (°C)",
+                    "power_control_enabled": "Activer le pilotage du niveau de puissance",
+                    "power_control_attribute": "Attribut de puissance (fan_mode / preset_mode)",
+                    "power_default_level_index": "Index du niveau de puissance par défaut",
+                    "power_boost_enabled": "Activer le boost après hausse de consigne",
+                    "power_boost_duration_min": "Durée du boost (minutes)"
+                }
+            }
         }
-      }
     }
-  }
 }
