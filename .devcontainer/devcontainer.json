@@ -5,7 +5,8 @@
     },
     "name": "Versatile Thermostat Poêle à Pellets",
     "appPort": ["8123:8123"],
-    "postCreateCommand": "pip install --user -r requirements_dev.txt && pip install --user -r requirements_test.txt",
+    "postCreateCommand": "bash .devcontainer/bootstrap-python.sh",
+    "postStartCommand": "bash .devcontainer/bootstrap-python.sh",
     "mounts": ["source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"],
     "customizations": {
         "vscode": {

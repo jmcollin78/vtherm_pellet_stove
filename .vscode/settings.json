@@ -7,14 +7,12 @@
     "files.associations": {
         "*.yaml": "home-assistant"
     },
-    "python.testing.pytestArgs": [
-        "-vv"
-    ],
+    "python.testing.pytestArgs": ["-vv"],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
     "python.analysis.extraPaths": [
         "/workspaces/vtherm_pellet_stove/custom_components/vtherm_pellet_stove",
         "/home/vscode/.local/lib/python3.13/site-packages/homeassistant"
     ],
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+    "python-envs.defaultEnvManager": "ms-python.python:venv"
 }
