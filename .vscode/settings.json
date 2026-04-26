@@ -14,5 +14,6 @@
         "/workspaces/vtherm_pellet_stove/custom_components/vtherm_pellet_stove",
         "/home/vscode/.local/lib/python3.13/site-packages/homeassistant"
     ],
+    "python.defaultInterpreterPath": "/workspaces/vtherm_pellet_stove/.venv/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:venv"
 }
