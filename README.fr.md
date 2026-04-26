@@ -1,5 +1,7 @@
 # Versatile Thermostat Poêle à Pellets
-
+[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/release/jmcollin78/vtherm_pellet_stove.svg)](https://github.com/jmcollin78/vtherm_pellet_stove/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [Read the English version](README.md)
 
 <p align="center">
@@ -59,7 +61,9 @@ Le plugin utilise l'API publique [vtherm_api](https://github.com/KipK/vtherm_api
 ## Documentation
 
 - 🇬🇧 [User documentation](documentation/en/vtherm_pellet_stove.md)
+- �🇧 [Technical documentation](documentation/en/technical_doc.md)
 - 🇫🇷 [Documentation utilisateur](documentation/fr/vtherm_pellet_stove.md)
+- 🇫🇷 [Documentation technique](documentation/fr/technical_doc.md)
 
 ## Architecture
 
