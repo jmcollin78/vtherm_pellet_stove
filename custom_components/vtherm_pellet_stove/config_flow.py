@@ -23,7 +23,6 @@ from .const import (
     CONF_POWER_CONTROL_ATTRIBUTE,
     CONF_POWER_CONTROL_ENABLED,
     CONF_POWER_DEFAULT_LEVEL_INDEX,
-    CONF_POWER_LEVELS,
     CONF_SAFETY_ROOM_TEMP,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
@@ -164,6 +163,10 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
     """Manage Pellet Stove plugin config entries."""
 
     VERSION = 1
+
+    def is_matching(self, other_flow: "PelletStoveConfigFlow") -> bool:
+        """Return True if the other flow targets the same domain entry."""
+        return other_flow.unique_id == self.unique_id
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Create the global defaults entry on first install, then per-thermostat."""

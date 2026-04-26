@@ -142,7 +142,7 @@ class PelletRegulationController:
         return self.on_percent
 
     def calculate(
-        self,
+        self,  # pylint: disable=unused-argument
         target_temp: float,
         current_temp: float | None,
         *args: Any,
