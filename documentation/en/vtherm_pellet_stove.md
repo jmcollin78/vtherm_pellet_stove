@@ -12,6 +12,12 @@
   - [2. Installation](#2-installation)
     - [Via HACS (recommended)](#via-hacs-recommended)
     - [Manual installation](#manual-installation)
+  - [Quick Start — Setting up a pellet stove VTherm in 5 steps](#quick-start--setting-up-a-pellet-stove-vtherm-in-5-steps)
+    - [Step 1 — Install Versatile Thermostat](#step-1--install-versatile-thermostat)
+    - [Step 2 — Install vtherm\_pellet\_stove and create the global defaults](#step-2--install-vtherm_pellet_stove-and-create-the-global-defaults)
+    - [Step 3 — Create the VTherm of type over\_switch](#step-3--create-the-vtherm-of-type-over_switch)
+    - [Step 4 — Add the custom ON/OFF commands](#step-4--add-the-custom-onoff-commands)
+    - [Step 5 — Link vtherm\_pellet\_stove to the VTherm](#step-5--link-vtherm_pellet_stove-to-the-vtherm)
   - [3. How it works](#3-how-it-works)
   - [4. Configuring Versatile Thermostat](#4-configuring-versatile-thermostat)
   - [5. Plugin configuration](#5-plugin-configuration)
@@ -40,8 +46,8 @@
 
 | Requirement                                                                | Minimum version |
 | -------------------------------------------------------------------------- | --------------- |
-| Home Assistant                                                             | 2024.4          |
-| [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 6.0             |
+| Home Assistant                                                             | 2026.4          |
+| [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0            |
 | HACS                                                                       | 1.34            |
 
 Your pellet stove **must already be exposed as a `climate` entity** in Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, or any other integration). This plugin does **not** communicate directly with stoves.
@@ -64,6 +70,75 @@ Your pellet stove **must already be exposed as a `climate` entity** in Home Assi
 1. Download the latest release from [GitHub Releases](https://github.com/jmcollin78/vtherm_pellet_stove/releases).
 2. Copy the `custom_components/vtherm_pellet_stove` folder into your HA `config/custom_components/` directory.
 3. Restart Home Assistant.
+
+---
+
+## Quick Start — Setting up a pellet stove VTherm in 5 steps
+
+This section walks you through the complete setup from scratch. Each step links to the detailed reference section for more information.
+
+### Step 1 — Install Versatile Thermostat
+
+If Versatile Thermostat is not already installed:
+
+1. Open HACS → **Integrations**.
+2. Search for **Versatile Thermostat** and click **Download**.
+3. Restart Home Assistant.
+4. Go to **Settings → Devices & Services → Add Integration**, search for **Versatile Thermostat** and complete its initial setup.
+
+Refer to the [Versatile Thermostat documentation](https://github.com/jmcollin78/versatile_thermostat) for details.
+
+### Step 2 — Install vtherm_pellet_stove and create the global defaults
+
+1. Install this plugin following [§2 Installation](#2-installation).
+2. After the restart, go to **Settings → Devices & Services**.
+3. Click **Add Integration** and select **Versatile Thermostat Pellet Stove**.
+4. A **global defaults** entry is created automatically with sensible default values. It applies to every pellet stove VTherm that has no per-thermostat override.
+5. *(Optional)* Click **Options** on the global entry to adjust the defaults (hysteresis, guard-rails, power levels…) now or later — see [§6 Configuration reference](#6-configuration-reference).
+
+### Step 3 — Create the VTherm of type `over_switch`
+
+1. Go to **Settings → Devices & Services → Versatile Thermostat → Add**.
+2. Choose thermostat type **`over_switch`**.
+3. In the **Underlying entity** field, select the `climate` entity that controls your pellet stove (e.g. `climate.duepi_evo`).
+4. In the **Proportional function** (algorithm) field, select **`pellet_regulation`**.
+5. Set the cycle duration (`cycle_min`) to `60` minutes.
+6. Set **Minimal activation delay** to `1800` s (30 min) and **Minimal deactivation delay** to `1500` s (25 min) — these should align with `min_on_duration_min` and `min_off_duration_min + cooldown_duration_min`.
+7. Complete the remaining VTherm settings (name, temperature sensor, etc.) and save.
+
+### Step 4 — Add the custom ON/OFF commands
+
+VTherm's `over_switch` mode sends two configurable service calls to the stove. These must be set on the **underlying entity** configuration page of the VTherm you just created:
+
+1. Open the VTherm entity → **Options** → **Underlying entities** page.
+2. In the **Switch ON command** (`vswitch_on`) field, enter:
+   ```
+   set_hvac_mode/hvac_mode:heat
+   ```
+3. In the **Switch OFF command** (`vswitch_off`) field, enter:
+   ```
+   set_hvac_mode/hvac_mode:off
+   ```
+4. Save. VTherm will now call `climate.set_hvac_mode(hvac_mode=heat)` to ignite the stove and `climate.set_hvac_mode(hvac_mode=off)` to extinguish it.
+
+> **Why these commands?** Pellet stoves are exposed as `climate` entities, not `switch` entities. The `vswitch_on/off` syntax lets VTherm call any HA service in the format `service_name/key:value`.
+
+### Step 5 — Link vtherm_pellet_stove to the VTherm
+
+Choose one of the two options depending on whether you need parameters specific to this stove:
+
+**Option A — Use the global defaults (no action needed)**
+
+If the global default parameters suit this stove, no additional step is required. The VTherm automatically picks up the global defaults because it is configured with the `pellet_regulation` algorithm.
+
+**Option B — Create a per-thermostat entry (recommended for fine-tuning)**
+
+1. Go to **Settings → Devices & Services → Versatile Thermostat Pellet Stove → Add entry**.
+2. Select the VTherm `climate` entity created in Step 3.
+3. Adjust the parameters specifically for this stove (e.g. different `min_on_duration_min`, adapted `power_levels`).
+4. Save. This entry overrides the global defaults only for this VTherm — see [§5 Plugin configuration](#5-plugin-configuration).
+
+> Per-thermostat values always take precedence over the global defaults. You can have one entry per stove.
 
 ---
 

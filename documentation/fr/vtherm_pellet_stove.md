@@ -12,6 +12,12 @@
   - [2. Installation](#2-installation)
     - [Via HACS (recommandé)](#via-hacs-recommandé)
     - [Installation manuelle](#installation-manuelle)
+  - [Démarche — Mise en place en 5 étapes](#démarche--mise-en-place-en-5-étapes)
+    - [Étape 1 — Installer Versatile Thermostat](#étape-1--installer-versatile-thermostat)
+    - [Étape 2 — Installer vtherm\_pellet\_stove et créer la configuration par défaut](#étape-2--installer-vtherm_pellet_stove-et-créer-la-configuration-par-défaut)
+    - [Étape 3 — Créer le VTherm de type `over_switch`](#étape-3--créer-le-vtherm-de-type-over_switch)
+    - [Étape 4 — Ajouter les commandes personnalisées d'allumage et d'extinction](#étape-4--ajouter-les-commandes-personnalisées-dallumage-et-dextinction)
+    - [Étape 5 — Relier vtherm\_pellet\_stove au VTherm](#étape-5--relier-vtherm_pellet_stove-au-vtherm)
   - [3. Fonctionnement](#3-fonctionnement)
   - [4. Configuration de Versatile Thermostat](#4-configuration-de-versatile-thermostat)
   - [5. Configuration du plugin](#5-configuration-du-plugin)
@@ -40,8 +46,8 @@
 
 | Prérequis                                                                  | Version minimale |
 | -------------------------------------------------------------------------- | ---------------- |
-| Home Assistant                                                             | 2024.4           |
-| [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 6.0              |
+| Home Assistant                                                             | 2026.4           |
+| [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0             |
 | HACS                                                                       | 1.34             |
 
 Votre poêle à pellets **doit être déjà exposé comme entité `climate`** dans Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, ou toute autre intégration). Ce plugin ne communique **pas** directement avec les poêles.
@@ -64,6 +70,75 @@ Votre poêle à pellets **doit être déjà exposé comme entité `climate`** da
 1. Télécharger la dernière version depuis les [Releases GitHub](https://github.com/jmcollin78/vtherm_pellet_stove/releases).
 2. Copier le dossier `custom_components/vtherm_pellet_stove` dans le répertoire `config/custom_components/` de HA.
 3. Redémarrer Home Assistant.
+
+---
+
+## Démarche — Mise en place en 5 étapes
+
+Cette section guide pas à pas la configuration complète depuis zéro. Chaque étape renvoie à la section de référence détaillée correspondante.
+
+### Étape 1 — Installer Versatile Thermostat
+
+Si Versatile Thermostat n'est pas encore installé :
+
+1. Ouvrir HACS → **Intégrations**.
+2. Rechercher **Versatile Thermostat** et cliquer sur **Télécharger**.
+3. Redémarrer Home Assistant.
+4. Aller dans **Paramètres → Appareils et services → Ajouter une intégration**, rechercher **Versatile Thermostat** et finaliser la configuration initiale.
+
+Se référer à la [documentation de Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) pour les détails.
+
+### Étape 2 — Installer vtherm_pellet_stove et créer la configuration par défaut
+
+1. Installer ce plugin en suivant le [§2 Installation](#2-installation).
+2. Après le redémarrage, aller dans **Paramètres → Appareils et services**.
+3. Cliquer sur **Ajouter une intégration** et sélectionner **Versatile Thermostat Poêle à Pellets**.
+4. Une entrée de **defaults globaux** est créée automatiquement avec des valeurs par défaut raisonnables. Elle s'applique à tous les VTherm poêle à pellets n'ayant pas d'entrée par thermostat.
+5. *(Optionnel)* Cliquer sur **Options** de l'entrée globale pour ajuster les paramètres par défaut (hystérésis, garde-fous, niveaux de puissance…) maintenant ou plus tard — voir [§6 Référence des paramètres](#6-référence-des-paramètres).
+
+### Étape 3 — Créer le VTherm de type `over_switch`
+
+1. Aller dans **Paramètres → Appareils et services → Versatile Thermostat → Ajouter**.
+2. Choisir le type de thermostat **`over_switch`**.
+3. Dans le champ **Entité sous-jacente**, sélectionner l'entité `climate` qui contrôle le poêle à pellets (ex. `climate.duepi_evo`).
+4. Dans le champ **Fonction proportionnelle** (algorithme), sélectionner **`pellet_regulation`**.
+5. Définir la durée du cycle (`cycle_min`) à `60` minutes.
+6. Définir le **Délai d'activation minimal** à `1800` s (30 min) et le **Délai de désactivation minimal** à `1500` s (25 min) — ces valeurs doivent correspondre à `min_on_duration_min` et `min_off_duration_min + cooldown_duration_min`.
+7. Compléter les autres paramètres VTherm (nom, capteur de température, etc.) et sauvegarder.
+
+### Étape 4 — Ajouter les commandes personnalisées d'allumage et d'extinction
+
+Le mode `over_switch` de VTherm communique avec le poêle via deux appels de service configurables. Ces commandes doivent être renseignées dans la **page de configuration du sous-jacent** du VTherm créé à l'étape précédente :
+
+1. Ouvrir l'entité VTherm → **Options** → page **Entités sous-jacentes**.
+2. Dans le champ **Commande d'allumage** (`vswitch_on`), saisir :
+   ```
+   set_hvac_mode/hvac_mode:heat
+   ```
+3. Dans le champ **Commande d'extinction** (`vswitch_off`), saisir :
+   ```
+   set_hvac_mode/hvac_mode:off
+   ```
+4. Sauvegarder. VTherm appellera désormais `climate.set_hvac_mode(hvac_mode=heat)` pour allumer le poêle et `climate.set_hvac_mode(hvac_mode=off)` pour l'éteindre.
+
+> **Pourquoi ces commandes ?** Les poêles à pellets sont exposés comme entités `climate`, pas `switch`. La syntaxe `vswitch_on/off` permet à VTherm d'appeler n'importe quel service HA au format `nom_service/clé:valeur`.
+
+### Étape 5 — Relier vtherm_pellet_stove au VTherm
+
+Choisir l'une des deux options selon que des paramètres spécifiques à ce poêle sont nécessaires :
+
+**Option A — Utiliser les defaults globaux (aucune action requise)**
+
+Si les paramètres par défaut globaux conviennent à ce poêle, aucune étape supplémentaire n'est nécessaire. Le VTherm utilise automatiquement les defaults globaux car il est configuré avec l'algorithme `pellet_regulation`.
+
+**Option B — Créer une entrée par thermostat (recommandé pour un réglage fin)**
+
+1. Aller dans **Paramètres → Appareils et services → Versatile Thermostat Poêle à Pellets → Ajouter une entrée**.
+2. Sélectionner l'entité `climate` VTherm créée à l'étape 3.
+3. Ajuster les paramètres spécifiquement pour ce poêle (ex. `min_on_duration_min` différent, `power_levels` adaptés).
+4. Sauvegarder. Cette entrée écrase les defaults globaux uniquement pour ce VTherm — voir [§5 Configuration du plugin](#5-configuration-du-plugin).
+
+> Les valeurs par thermostat ont toujours la priorité sur les defaults globaux. Il est possible d'avoir une entrée par poêle.
 
 ---
 

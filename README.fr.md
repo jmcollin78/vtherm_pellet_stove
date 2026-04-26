@@ -61,7 +61,7 @@ Le plugin utilise l'API publique [vtherm_api](https://github.com/KipK/vtherm_api
 ## Documentation
 
 - 🇬🇧 [User documentation](documentation/en/vtherm_pellet_stove.md)
-- �🇧 [Technical documentation](documentation/en/technical_doc.md)
+- 🇬🇧 [Technical documentation](documentation/en/technical_doc.md)
 - 🇫🇷 [Documentation utilisateur](documentation/fr/vtherm_pellet_stove.md)
 - 🇫🇷 [Documentation technique](documentation/fr/technical_doc.md)
 
