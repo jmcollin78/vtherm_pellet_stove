@@ -2,8 +2,13 @@
 
 set -euo pipefail
 
+VENV_DIR="/workspaces/vtherm_pellet_stove/.venv"
 
-source /workspaces/vtherm_pellet_stove/.venv/bin/activate
+if [[ ! -d "$VENV_DIR" ]]; then
+	python3 -m venv "$VENV_DIR"
+fi
+
+source "$VENV_DIR/bin/activate"
 
 bash .devcontainer/setup-homeassistant.sh
 
