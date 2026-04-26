@@ -7,7 +7,11 @@
     "appPort": ["8123:8123"],
     "postCreateCommand": "bash .devcontainer/bootstrap-python.sh",
     "postStartCommand": "bash .devcontainer/bootstrap-python.sh",
-    "mounts": ["source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"],
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+        // the VTherm integration
+        "source=/Users/jmcollin/SugarSync/Projets/home-assistant/versatile_thermostat/custom_components/versatile_thermostat,target=/workspaces/vtherm_pellet_stove/custom_components/versatile_thermostat,type=bind"
+    ],
     "customizations": {
         "vscode": {
             "extensions": [

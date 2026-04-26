@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+
+source /workspaces/vtherm_pellet_stove/.venv/bin/activate
+
 bash .devcontainer/setup-homeassistant.sh
 
 python -m pip install --upgrade pip
