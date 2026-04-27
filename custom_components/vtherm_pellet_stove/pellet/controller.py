@@ -290,7 +290,8 @@ class PelletRegulationController:
         # ----------------------------------------------------------------
         # 1. Mode HVAC OFF → extinction immédiate
         # ----------------------------------------------------------------
-        if hvac_mode.lower() == HVAC_MODE_OFF:
+        # `hvac_mode` peut être une instance VThermHvacMode; forcer str()
+        if str(hvac_mode).lower() == HVAC_MODE_OFF:
             if self._state.is_heating:
                 self._state.last_off_at = now
             self._state.is_heating = False

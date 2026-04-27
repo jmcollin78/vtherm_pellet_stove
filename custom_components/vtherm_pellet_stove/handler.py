@@ -311,8 +311,8 @@ class PelletRegulationHandler:
 
         self._last_applied_level_index = level_index
 
-    def _on_cycle_start(self, *_args: Any, **_kwargs: Any) -> None:
+    async def _on_cycle_start(self, *_args: Any, **_kwargs: Any) -> None:
         """Callback at the start of each cycle (v0.1: no-op)."""
 
-    def _on_cycle_end(self, *_args: Any, **_kwargs: Any) -> None:
+    async def _on_cycle_end(self, *_args: Any, **_kwargs: Any) -> None:
         """Callback at the end of each cycle (v0.1: no-op)."""

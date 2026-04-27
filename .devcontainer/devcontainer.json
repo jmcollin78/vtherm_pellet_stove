@@ -4,13 +4,16 @@
         "dockerfile": "Dockerfile"
     },
     "name": "Versatile Thermostat Poêle à Pellets",
-    "appPort": ["8123:8123"],
+    "appPort": ["8125:8123"],
     "postCreateCommand": "bash .devcontainer/bootstrap-python.sh",
     "postStartCommand": "bash .devcontainer/bootstrap-python.sh",
     "mounts": [
         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
         // the VTherm integration
-        "source=/Users/jmcollin/SugarSync/Projets/home-assistant/versatile_thermostat/custom_components/versatile_thermostat,target=/workspaces/vtherm_pellet_stove/custom_components/versatile_thermostat,type=bind"
+        "source=/Users/jmcollin/SugarSync/Projets/home-assistant/versatile_thermostat/custom_components/versatile_thermostat,target=/workspaces/vtherm_pellet_stove/custom_components/versatile_thermostat,type=bind",
+        // the versatile-thermostat-ui-card
+        "source=/Users/jmcollin/SugarSync/Projets/home-assistant/versatile-thermostat-ui-card/dist,target=/workspaces/vtherm_pellet_stove/.homeassistant/www/community/versatile-thermostat-ui-card,type=bind"
+
     ],
     "customizations": {
         "vscode": {

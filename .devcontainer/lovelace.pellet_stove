@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "lovelace.pellet_stove",
+  "data": {
+    "config": {
+      "views": [
+        {
+          "type": "sections",
+          "sections": [
+            {
+              "type": "grid",
+              "cards": [
+                {
+                  "type": "heading",
+                  "heading": "VTherm",
+                  "heading_style": "title",
+                  "icon": "mdi:gas-burner"
+                },
+                {
+                  "type": "custom:versatile-thermostat-ui-card",
+                  "entity": "climate.vtherm_pellet",
+                  "name": "VTherm Pellet",
+                  "theme": "vtherm",
+                  "set_current_as_main": true,
+                  "allow_lock_toggle": false,
+                  "show_regulation_chart": true,
+                  "allow_preset_modification": true
+                },
+                {
+                  "type": "history-graph",
+                  "entities": [
+                    {
+                      "entity": "climate.vtherm_pellet"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "grid",
+              "cards": [
+                {
+                  "type": "heading",
+                  "heading_style": "title",
+                  "heading": "Underlying",
+                  "icon": "mdi:home-thermometer-outline"
+                },
+                {
+                  "type": "thermostat",
+                  "entity": "climate.poele_pellets_fake",
+                  "show_current_as_primary": true
+                },
+                {
+                  "type": "tile",
+                  "entity": "input_number.fake_room_temperature",
+                  "vertical": false,
+                  "features_position": "bottom"
+                },
+                {
+                  "type": "tile",
+                  "entity": "input_number.fake_outdoor_temperature",
+                  "vertical": false,
+                  "features_position": "bottom"
+                },
+                {
+                  "type": "history-graph",
+                  "entities": [
+                    {
+                      "entity": "climate.poele_pellets_fake"
+                    },
+                    {
+                      "entity": "input_boolean.fake_pellet_stove_switch",
+                      "name": "Switch"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
