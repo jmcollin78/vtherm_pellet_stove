@@ -13,6 +13,8 @@ homeassistant:
 system_health:
 energy:
 
+automation: !include automations.yaml
+
 recorder:
     auto_purge: true
     purge_keep_days: 1
@@ -126,6 +128,14 @@ climate:
       ac_mode: false
       min_temp: 15
       max_temp: 30
+      cold_tolerance: 0
+      hot_tolerance: 0
+
+template:
+    - binary_sensor:
+        - name: Poele actif
+          unique_id: poele_pellet_actif
+          state: "{{is_state('climate.poele_pellets_fake', 'heat') }}"
 
 frontend:
     extra_module_url:

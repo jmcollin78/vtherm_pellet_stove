@@ -13,6 +13,40 @@
               "cards": [
                 {
                   "type": "heading",
+                  "heading": "Nouvelle section"
+                },
+                {
+                  "type": "tile",
+                  "grid_options": {
+                    "columns": "full"
+                  },
+                  "entity": "sensor.rad_simulator_room_temperature",
+                  "state_content": "last_changed",
+                  "vertical": false,
+                  "features": [
+                    {
+                      "type": "trend-graph"
+                    }
+                  ],
+                  "features_position": "bottom"
+                },
+                {
+                  "type": "tile",
+                  "grid_options": {
+                    "columns": "full"
+                  },
+                  "entity": "sensor.rad_simulator_external_temperature",
+                  "state_content": "last_changed",
+                  "vertical": false,
+                  "features_position": "bottom"
+                }
+              ]
+            },
+            {
+              "type": "grid",
+              "cards": [
+                {
+                  "type": "heading",
                   "heading": "VTherm",
                   "heading_style": "title",
                   "icon": "mdi:gas-burner"
@@ -32,8 +66,12 @@
                   "entities": [
                     {
                       "entity": "climate.vtherm_pellet"
+                    },
+                    {
+                      "entity": "binary_sensor.poele_actif"
                     }
-                  ]
+                  ],
+                  "hours_to_show": 1
                 }
               ]
             },
@@ -47,33 +85,40 @@
                   "icon": "mdi:home-thermometer-outline"
                 },
                 {
-                  "type": "thermostat",
+                  "type": "tile",
+                  "entity": "switch.rad_simulator_heater_switch_pwm",
+                  "state_content": "last_changed",
+                  "vertical": false,
+                  "features_position": "bottom",
+                  "grid_options": {
+                    "columns": "full"
+                  }
+                },
+                {
+                  "type": "tile",
+                  "entity": "binary_sensor.poele_actif",
+                  "state_content": "last_changed",
+                  "vertical": false,
+                  "features_position": "bottom",
+                  "grid_options": {
+                    "columns": "full"
+                  }
+                },
+                {
+                  "type": "tile",
                   "entity": "climate.poele_pellets_fake",
-                  "show_current_as_primary": true
-                },
-                {
-                  "type": "tile",
-                  "entity": "input_number.fake_room_temperature",
-                  "vertical": false,
-                  "features_position": "bottom"
-                },
-                {
-                  "type": "tile",
-                  "entity": "input_number.fake_outdoor_temperature",
-                  "vertical": false,
-                  "features_position": "bottom"
+                  "grid_options": {
+                    "columns": "full"
+                  }
                 },
                 {
                   "type": "history-graph",
                   "entities": [
                     {
-                      "entity": "climate.poele_pellets_fake"
-                    },
-                    {
-                      "entity": "input_boolean.fake_pellet_stove_switch",
-                      "name": "Switch"
+                      "entity": "switch.rad_simulator_heater_switch_pwm"
                     }
-                  ]
+                  ],
+                  "hours_to_show": 1
                 }
               ]
             }

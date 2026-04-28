@@ -217,6 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-.homeassistant/www/
+.homeassistant/
 custom_components/versatile_thermostat/
 custom_components/heating-simulator/
