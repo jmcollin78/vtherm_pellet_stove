@@ -49,7 +49,7 @@ async def async_setup_entry(
     # Ajouter les capteurs en attente (handlers démarrés avant le setup)
     pending: list[PelletDebugSensor] = domain_data.pop("pending_sensors", [])
     if pending:
-        _LOGGER.debug("Ajout de %d capteur(s) pellet en attente", len(pending))
+        _LOGGER.debug("%d pending pellet debug sensor(s) registered", len(pending))
         async_add_entities(pending, update_before_add=True)
 
 

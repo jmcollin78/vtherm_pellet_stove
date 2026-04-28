@@ -400,8 +400,8 @@ class PelletRegulationController:
             if self._state.is_heating:
                 elapsed_on = _elapsed_min(self._state.last_on_at, now)
                 _LOGGER.warning(
-                    "%s - SÉCURITÉ: température ambiante %.1f°C ≥ %.1f°C → "
-                    "extinction forcée après %.0f min de chauffe",
+                    "%s - SAFETY: room temperature %.1f°C ≥ %.1f°C → "
+                    "forced shutdown after %.0f min of heating",
                     self._name,
                     current,
                     self._safety_room_temp,
@@ -411,7 +411,7 @@ class PelletRegulationController:
                 self._state.is_heating = False
             else:
                 _LOGGER.debug(
-                    "%s - Sécurité haute temp maintenue (poêle déjà éteint): %.1f°C ≥ %.1f°C",
+                    "%s - Safety high-temp hold (stove already off): %.1f°C ≥ %.1f°C",
                     self._name,
                     current,
                     self._safety_room_temp,
@@ -441,7 +441,7 @@ class PelletRegulationController:
             if not self._guard.can_turn_off(now, self._state):
                 elapsed_on = _elapsed_min(self._state.last_on_at, now)
                 _LOGGER.info(
-                    "%s - Extinction reportée (garde-fou min_on): %.0f/%.0f min de chauffe",
+                    "%s - Shutdown delayed (min_on guard): %.0f/%.0f min of heating",
                     self._name,
                     elapsed_on,
                     self._guard.min_on_duration_min,
@@ -456,7 +456,7 @@ class PelletRegulationController:
                     self._guard.min_off_duration_min + self._guard.cooldown_duration_min
                 )
                 _LOGGER.info(
-                    "%s - Allumage reporté (garde-fou min_off+cooldown): %.0f/%.0f min d'arrêt",
+                    "%s - Ignition delayed (min_off+cooldown guard): %.0f/%.0f min off",
                     self._name,
                     elapsed_off,
                     required,
@@ -472,7 +472,7 @@ class PelletRegulationController:
                 # Transition réelle OFF → ON
                 elapsed_off = _elapsed_min(self._state.last_off_at, now)
                 _LOGGER.info(
-                    "%s - Allumage du poêle (reason=%s) après %.0f min d'arrêt "
+                    "%s - Stove ignited (reason=%s) after %.0f min off "
                     "[target=%.1f current=%s]",
                     self._name,
                     final_reason,
@@ -496,7 +496,7 @@ class PelletRegulationController:
                 # Transition réelle ON → OFF
                 elapsed_on = _elapsed_min(self._state.last_on_at, now)
                 _LOGGER.info(
-                    "%s - Extinction du poêle (reason=%s) après %.0f min de chauffe "
+                    "%s - Stove off (reason=%s) after %.0f min of heating "
                     "[target=%.1f current=%s]",
                     self._name,
                     final_reason,

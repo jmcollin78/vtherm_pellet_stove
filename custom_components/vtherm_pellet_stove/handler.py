@@ -148,7 +148,7 @@ class PelletRegulationHandler:
                 self._controller.last_reason,
             )
 
-        # Créer et enregistrer le capteur de débogage
+        # Restore the persistent state and register the debug sensor
         self._debug_sensor = PelletDebugSensor(self._thermostat)
         hass = self._thermostat.hass
         domain_data = hass.data.setdefault(DOMAIN, {})
@@ -156,14 +156,14 @@ class PelletRegulationHandler:
         if cb is not None:
             cb([self._debug_sensor], update_before_add=True)
             _LOGGER.debug(
-                "%s - async_added_to_hass: capteur de débogage enregistré",
+                "%s - async_added_to_hass: debug sensor registered",
                 self._thermostat.name,
             )
         else:
             domain_data.setdefault("pending_sensors", []).append(self._debug_sensor)
             _LOGGER.debug(
-                "%s - async_added_to_hass: capteur de débogage mis en attente "
-                "(platform sensor pas encore prête)",
+                "%s - async_added_to_hass: debug sensor queued "
+                "(sensor platform not yet ready)",
                 self._thermostat.name,
             )
 
@@ -188,8 +188,8 @@ class PelletRegulationHandler:
             except RuntimeError:
                 pass
 
-        # Détacher le capteur de débogage (l'entité reste dans HA mais n'est
-        # plus alimentée jusqu'au prochain démarrage du handler).
+        # Detach the debug sensor (entity stays in HA showing last known state
+        # until the handler restarts).
         self._debug_sensor = None
 
     async def control_heating(
