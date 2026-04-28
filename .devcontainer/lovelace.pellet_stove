@@ -119,6 +119,60 @@
                     }
                   ],
                   "hours_to_show": 1
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "phase",
+                  "name": "Phase"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "on_percent",
+                  "name": "On percent"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "elapsed_on_min",
+                  "name": "Time on (min)"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "elapsed_off_min",
+                  "name": "Time off (min)"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "current_level",
+                  "name": "Niveau courant"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "last_reason",
+                  "name": "Last reason"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "hysteresis_on",
+                  "name": "Hysteresis on"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "hysteresis_off",
+                  "name": "Hysteresis off"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "boost_active",
+                  "name": "Boost active"
                 }
               ]
             }
