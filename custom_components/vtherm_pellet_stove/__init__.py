@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import CoreState, HomeAssistant
 from vtherm_api.log_collector import get_vtherm_logger
 from vtherm_api.vtherm_api import VThermAPI
@@ -20,6 +21,10 @@ from .const import (
 from .factory import PelletRegulationFactory
 
 VT_DOMAIN = "versatile_thermostat"
+
+#: Plateforme sensor pour l'entité de débogage.
+#: Activée uniquement sur l'entrée globale (unique_id == DOMAIN).
+_PLATFORMS = [Platform.SENSOR]
 
 _LOGGER = get_vtherm_logger(__name__)
 
@@ -135,6 +140,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
+    # La plateforme sensor n'est activée que pour l'entrée globale afin
+    # d'avoir un unique callback async_add_entities partagé par tous les handlers.
+    if entry.unique_id == DOMAIN:
+        await hass.config_entries.async_forward_entry_setups(entry, _PLATFORMS)
+
     # During initial HA startup, VTherm restores its own entries independently.
     # Reloading them here would be redundant and could disturb state restore.
     if hass.state == CoreState.running:
@@ -152,6 +162,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a vtherm_pellet_stove config entry."""
     data = _ensure_domain_data(hass)
     data.pop(entry.entry_id, None)
+
+    # Décharger la plateforme sensor de l'entrée globale si applicable.
+    if entry.unique_id == DOMAIN:
+        await hass.config_entries.async_unload_platforms(entry, _PLATFORMS)
+        # Nettoyer le callback stocké.
+        from .const import DATA_SENSOR_ADD_CB  # pylint: disable=import-outside-toplevel
+
+        data.pop(DATA_SENSOR_ADD_CB, None)
 
     # Unregister the factory only when the last plugin entry is removed.
     if not [key for key in data if key != DATA_FACTORY_REGISTERED]:

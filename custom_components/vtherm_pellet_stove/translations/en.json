@@ -1,5 +1,78 @@
 {
     "title": "Versatile Thermostat Pellet Stove",
+    "entity": {
+        "sensor": {
+            "pellet_debug": {
+                "name": "Pellet Regulation Debug",
+                "state": {
+                    "off": "Off",
+                    "igniting": "Igniting",
+                    "burning": "Burning",
+                    "cooldown": "Cooldown",
+                    "unknown": "Unknown"
+                },
+                "state_attributes": {
+                    "phase": {
+                        "name": "Phase"
+                    },
+                    "is_heating": {
+                        "name": "Is heating"
+                    },
+                    "on_percent": {
+                        "name": "On percent"
+                    },
+                    "current_level": {
+                        "name": "Current level"
+                    },
+                    "current_level_index": {
+                        "name": "Current level index"
+                    },
+                    "elapsed_on_min": {
+                        "name": "Elapsed on (min)"
+                    },
+                    "elapsed_off_min": {
+                        "name": "Elapsed off (min)"
+                    },
+                    "next_action_allowed_at": {
+                        "name": "Next action allowed at"
+                    },
+                    "last_reason": {
+                        "name": "Last reason"
+                    },
+                    "last_on_at": {
+                        "name": "Last on at"
+                    },
+                    "last_off_at": {
+                        "name": "Last off at"
+                    },
+                    "boost_active": {
+                        "name": "Boost active"
+                    },
+                    "boost_until": {
+                        "name": "Boost until"
+                    },
+                    "hysteresis_on": {
+                        "name": "Hysteresis ON (°C)"
+                    },
+                    "hysteresis_off": {
+                        "name": "Hysteresis OFF (°C)"
+                    },
+                    "min_on_duration_min": {
+                        "name": "Min ON duration (min)"
+                    },
+                    "min_off_duration_min": {
+                        "name": "Min OFF duration (min)"
+                    },
+                    "cooldown_duration_min": {
+                        "name": "Cooldown (min)"
+                    },
+                    "safety_room_temp": {
+                        "name": "Safety room temp (°C)"
+                    }
+                }
+            }
+        }
+    },
     "config": {
         "step": {
             "global": {

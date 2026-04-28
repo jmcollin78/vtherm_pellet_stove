@@ -10,10 +10,11 @@ Ce contrôleur :
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from vtherm_api.log_collector import get_vtherm_logger
 
 from .boost import BoostManager
 from .cycle_guard import CycleGuard
@@ -21,7 +22,7 @@ from .hysteresis import HysteresisDecider
 from .power_mapper import PowerMapper
 from .state import PelletState
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = get_vtherm_logger(__name__)
 
 # Chaîne représentant le mode HVAC OFF dans VTherm / HA.
 HVAC_MODE_OFF = "off"
@@ -70,11 +71,14 @@ class PelletRegulationController:
         Active le boost après hausse de consigne.
     power_boost_duration_min:
         Durée du boost (minutes).
+    name:
+        Nom logique du contrôleur (inclus dans les messages de log).
     """
 
     def __init__(
         self,
         *,
+        name: str = "",
         hysteresis_on: float,
         hysteresis_off: float,
         min_on_percent: float = 0.0,
@@ -89,6 +93,7 @@ class PelletRegulationController:
         power_boost_enabled: bool = True,
         power_boost_duration_min: int = 15,
     ) -> None:
+        self._name = name or "PelletController"
         self._min_on_percent = min_on_percent
         self._max_on_percent = max_on_percent
         self._safety_room_temp = safety_room_temp
@@ -130,6 +135,11 @@ class PelletRegulationController:
     # ------------------------------------------------------------------
     # Contrat VTherm prop_algorithm (§9.1)
     # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        """Nom logique du contrôleur."""
+        return self._name
 
     @property
     def on_percent(self) -> float:
@@ -264,6 +274,88 @@ class PelletRegulationController:
     # Calcul interne
     # ------------------------------------------------------------------
 
+    def current_phase(self, now: datetime | None = None) -> str:
+        """Phase courante du poêle : ``off``, ``igniting``, ``burning`` ou ``cooldown``."""
+        if now is None:
+            now = datetime.now(timezone.utc)
+        state = self._state
+        if state.is_heating:
+            if state.last_on_at is not None:
+                elapsed_min = _elapsed_min(state.last_on_at, now)
+                if elapsed_min < self._guard.min_on_duration_min:
+                    return "igniting"
+            return "burning"
+        else:
+            if state.last_off_at is not None:
+                elapsed_min = _elapsed_min(state.last_off_at, now)
+                required = (
+                    self._guard.min_off_duration_min + self._guard.cooldown_duration_min
+                )
+                if elapsed_min < required:
+                    return "cooldown"
+            return "off"
+
+    def get_debug_attributes(self, now: datetime | None = None) -> dict:
+        """Dictionnaire complet des attributs de débogage (pour l'entité sensor)."""
+        if now is None:
+            now = datetime.now(timezone.utc)
+
+        state = self._state
+
+        elapsed_on_min = (
+            round(_elapsed_min(state.last_on_at, now), 1) if state.is_heating else None
+        )
+        elapsed_off_min = (
+            round(_elapsed_min(state.last_off_at, now), 1)
+            if not state.is_heating
+            else None
+        )
+
+        next_action_at = None
+        if state.is_heating and state.last_on_at is not None:
+            next_action_at = state.last_on_at + timedelta(
+                minutes=self._guard.min_on_duration_min
+            )
+        elif not state.is_heating and state.last_off_at is not None:
+            required_min = (
+                self._guard.min_off_duration_min + self._guard.cooldown_duration_min
+            )
+            next_action_at = state.last_off_at + timedelta(minutes=required_min)
+
+        boost_active = (
+            self._boost_manager is not None
+            and state.boost_until is not None
+            and now < state.boost_until
+        )
+
+        return {
+            "phase": self.current_phase(now),
+            "is_heating": state.is_heating,
+            "on_percent": self.on_percent,
+            "current_level": self.current_level_value,
+            "current_level_index": state.current_level_index,
+            "elapsed_on_min": elapsed_on_min,
+            "elapsed_off_min": elapsed_off_min,
+            "next_action_allowed_at": (
+                next_action_at.isoformat() if next_action_at else None
+            ),
+            "last_reason": state.last_reason,
+            "last_on_at": state.last_on_at.isoformat() if state.last_on_at else None,
+            "last_off_at": state.last_off_at.isoformat() if state.last_off_at else None,
+            "boost_active": boost_active,
+            "boost_until": (
+                state.boost_until.isoformat()
+                if boost_active and state.boost_until
+                else None
+            ),
+            "hysteresis_on": self._hysteresis.hysteresis_on,
+            "hysteresis_off": self._hysteresis.hysteresis_off,
+            "min_on_duration_min": self._guard.min_on_duration_min,
+            "min_off_duration_min": self._guard.min_off_duration_min,
+            "cooldown_duration_min": self._guard.cooldown_duration_min,
+            "safety_room_temp": self._safety_room_temp,
+        }
+
     def _compute(
         self,
         *,
@@ -306,8 +398,24 @@ class PelletRegulationController:
         # ----------------------------------------------------------------
         if current is not None and current >= self._safety_room_temp:
             if self._state.is_heating:
+                elapsed_on = _elapsed_min(self._state.last_on_at, now)
+                _LOGGER.warning(
+                    "%s - SÉCURITÉ: température ambiante %.1f°C ≥ %.1f°C → "
+                    "extinction forcée après %.0f min de chauffe",
+                    self._name,
+                    current,
+                    self._safety_room_temp,
+                    elapsed_on,
+                )
                 self._state.last_off_at = now
                 self._state.is_heating = False
+            else:
+                _LOGGER.debug(
+                    "%s - Sécurité haute temp maintenue (poêle déjà éteint): %.1f°C ≥ %.1f°C",
+                    self._name,
+                    current,
+                    self._safety_room_temp,
+                )
             return PelletDecision(
                 on_percent=self._min_on_percent,
                 reason="safety",
@@ -331,11 +439,28 @@ class PelletRegulationController:
 
         if hyst.decision == "OFF" and self._state.is_heating:
             if not self._guard.can_turn_off(now, self._state):
+                elapsed_on = _elapsed_min(self._state.last_on_at, now)
+                _LOGGER.info(
+                    "%s - Extinction reportée (garde-fou min_on): %.0f/%.0f min de chauffe",
+                    self._name,
+                    elapsed_on,
+                    self._guard.min_on_duration_min,
+                )
                 final_decision = "ON"
                 final_reason = "locked_on"
 
         elif hyst.decision == "ON" and not self._state.is_heating:
             if not self._guard.can_turn_on(now, self._state):
+                elapsed_off = _elapsed_min(self._state.last_off_at, now)
+                required = (
+                    self._guard.min_off_duration_min + self._guard.cooldown_duration_min
+                )
+                _LOGGER.info(
+                    "%s - Allumage reporté (garde-fou min_off+cooldown): %.0f/%.0f min d'arrêt",
+                    self._name,
+                    elapsed_off,
+                    required,
+                )
                 final_decision = "OFF"
                 final_reason = "locked_off"
 
@@ -344,6 +469,17 @@ class PelletRegulationController:
         # ----------------------------------------------------------------
         if final_decision == "ON":
             if not self._state.is_heating:
+                # Transition réelle OFF → ON
+                elapsed_off = _elapsed_min(self._state.last_off_at, now)
+                _LOGGER.info(
+                    "%s - Allumage du poêle (reason=%s) après %.0f min d'arrêt "
+                    "[target=%.1f current=%s]",
+                    self._name,
+                    final_reason,
+                    elapsed_off,
+                    target,
+                    f"{current:.1f}" if current is not None else "N/A",
+                )
                 self._state.last_on_at = now
             self._state.is_heating = True
 
@@ -357,6 +493,17 @@ class PelletRegulationController:
             )
         else:
             if self._state.is_heating:
+                # Transition réelle ON → OFF
+                elapsed_on = _elapsed_min(self._state.last_on_at, now)
+                _LOGGER.info(
+                    "%s - Extinction du poêle (reason=%s) après %.0f min de chauffe "
+                    "[target=%.1f current=%s]",
+                    self._name,
+                    final_reason,
+                    elapsed_on,
+                    target,
+                    f"{current:.1f}" if current is not None else "N/A",
+                )
                 self._state.last_off_at = now
             self._state.is_heating = False
             return PelletDecision(
@@ -393,3 +540,15 @@ class PelletRegulationController:
             # contrôleur a déjà décidé ON (guard-rail ou hold).
             return self._power_mapper.default_level_index
         return idx
+
+
+# ---------------------------------------------------------------------------
+# Helpers (module-level)
+# ---------------------------------------------------------------------------
+
+
+def _elapsed_min(since: datetime | None, now: datetime) -> float:
+    """Minutes écoulées depuis ``since``, ou 0.0 si None."""
+    if since is None:
+        return 0.0
+    return (now - since).total_seconds() / 60

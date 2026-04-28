@@ -30,13 +30,13 @@ Le plugin reste un **module HACS autonome**, calqué sur la structure de [`vther
 
 ### 2.1 Pourquoi `over_switch` plutôt que `over_climate` ?
 
-| Critère | `over_climate` | **`over_switch`** _(retenu)_ |
-|---|---|---|
-| Cohérence avec l'API VTherm publique | Pas de point d'extension officiel pour la régulation (objet interne `PITemperatureRegulator`). | Point d'extension officiel : `InterfacePropAlgorithmFactory` (déjà utilisé par `tpi`, `hysteresis`, `smartpi`). |
-| Sémantique | Ambiguë : on pilote un `climate` mais on ré-implémente une régulation locale qui doublonne celle de VTherm. | Claire : VTherm orchestre le cycle ON/OFF via le `cycle_scheduler`. Le plugin fournit uniquement le **calcul proportionnel** spécialisé pellet. |
-| Pilotage d'un `climate` sous-jacent | Géré par VTherm via `UnderlyingClimate` (synchro `set_temperature`, `set_hvac_mode`, etc.). | Géré par VTherm via `UnderlyingSwitch` qui supporte n'importe quel domaine HA (`switch`, `climate`, …) grâce aux commandes paramétrables `vswitch_on`/`vswitch_off`. |
-| Cycle anti-court-cycle | À ré-implémenter. | Déjà fourni par VTherm (`minimal_activation_delay`, `minimal_deactivation_delay`, `cycle_min`). |
-| Effort d'intégration | Modifications nécessaires dans `vtherm_api` et `versatile_thermostat`. | **Aucune modification** des dépôts amont. Le plugin est purement additif. |
+| Critère                              | `over_climate`                                                                                              | **`over_switch`** _(retenu)_                                                                                                                                         |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cohérence avec l'API VTherm publique | Pas de point d'extension officiel pour la régulation (objet interne `PITemperatureRegulator`).              | Point d'extension officiel : `InterfacePropAlgorithmFactory` (déjà utilisé par `tpi`, `hysteresis`, `smartpi`).                                                      |
+| Sémantique                           | Ambiguë : on pilote un `climate` mais on ré-implémente une régulation locale qui doublonne celle de VTherm. | Claire : VTherm orchestre le cycle ON/OFF via le `cycle_scheduler`. Le plugin fournit uniquement le **calcul proportionnel** spécialisé pellet.                      |
+| Pilotage d'un `climate` sous-jacent  | Géré par VTherm via `UnderlyingClimate` (synchro `set_temperature`, `set_hvac_mode`, etc.).                 | Géré par VTherm via `UnderlyingSwitch` qui supporte n'importe quel domaine HA (`switch`, `climate`, …) grâce aux commandes paramétrables `vswitch_on`/`vswitch_off`. |
+| Cycle anti-court-cycle               | À ré-implémenter.                                                                                           | Déjà fourni par VTherm (`minimal_activation_delay`, `minimal_deactivation_delay`, `cycle_min`).                                                                      |
+| Effort d'intégration                 | Modifications nécessaires dans `vtherm_api` et `versatile_thermostat`.                                      | **Aucune modification** des dépôts amont. Le plugin est purement additif.                                                                                            |
 
 ### 2.2 Comment `over_switch` peut-il piloter un `climate` ?
 
@@ -80,6 +80,16 @@ L'entité sous-jacente est récupérée via `thermostat.entry_infos[CONF_UNDERLY
    - une entrée **par thermostat cible** (overrides), comme `vtherm_hysteresis`.
 7. Recharger les VTherms ciblés quand les options changent.
 8. Fournir traductions FR/EN, manifest HACS, brand assets.
+9. **Émettre des logs `INFO`** à chaque décision importante :
+   - allumage réel (transition OFF → ON) avec durée d'arrêt précédente,
+   - extinction réelle (transition ON → OFF) avec durée de chauffe,
+   - extinction retardée par garde-fou `min_on` (raison `locked_on`),
+   - allumage retardé par garde-fou `min_off+cooldown` (raison `locked_off`),
+   - déclenchement de la condition de sécurité (niveau `WARNING`) avec température ambiante.
+10. **Exposer une entité `sensor` de débogage** (`sensor.<vtherm>_pellet_regulation_debug`) :
+    - catégorie `DIAGNOSTIC`, mise à jour après chaque cycle,
+    - valeur d'état = phase courante : `off`, `igniting`, `burning`, `cooldown`,
+    - attributs complets : `is_heating`, `on_percent`, `current_level`, temps écoulés, `next_action_allowed_at`, `last_reason`, `boost_active`, paramètres d'hystérésis et de garde-fous.
 
 ### 3.2 Pourrait faire (SHOULD)
 
@@ -87,7 +97,7 @@ L'entité sous-jacente est récupérée via `thermostat.entry_infos[CONF_UNDERLY
 - Anticipation d'extinction par exploitation de `last_temperature_slope`.
 - Apprentissage simple `delta_T/min` par niveau (cf. inspiration `ab_estimator` de `vtherm_smartpi`).
 - Diagnostics HA (`async_get_config_entry_diagnostics`).
-- Capteur `sensor.<vtherm>_pellet_state` reflétant l'état interne (Off/Igniting/Burning/Cooldown).
+- ~~Capteur `sensor.<vtherm>_pellet_state` reflétant l'état interne~~ **Implémenté** : `sensor.py` `PelletDebugSensor` (§15).
 
 ### 3.3 Hors périmètre (WON'T)
 
@@ -102,13 +112,13 @@ L'entité sous-jacente est récupérée via `thermostat.entry_infos[CONF_UNDERLY
 
 ### 4.1 Dépôts voisins
 
-| Dépôt | Rôle |
-|---|---|
-| [`vtherm_api`](../../vtherm_api/) | Interfaces publiques (`InterfacePropAlgorithmFactory`, `InterfacePropAlgorithmHandler`, `InterfaceThermostatRuntime`, `InterfaceCycleScheduler`). |
-| [`versatile_thermostat`](../../versatile_thermostat/) | Cœur VTherm (référence : `ThermostatOverSwitch`, `UnderlyingSwitch`, `cycle_scheduler.py`). |
-| [`vtherm_hysteresis`](../../vtherm_hysteresis/) | **Squelette officiel** à cloner et adapter (factory, handler, config flow, persistance, reload). |
-| [`vtherm_smartpi`](../../vtherm_smartpi/) | Référence d'un plugin avancé (sous-paquet `smartpi/`, callbacks de cycle, diagnostics). |
-| [`Duepi_EVO`](../../Duepi_EVO/) | Exemple concret de `climate.poele` ciblable (`hvac_modes=[OFF, HEAT]`, `fan_modes=["1".."5"]`, `set_temperature`). |
+| Dépôt                                                 | Rôle                                                                                                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`vtherm_api`](../../vtherm_api/)                     | Interfaces publiques (`InterfacePropAlgorithmFactory`, `InterfacePropAlgorithmHandler`, `InterfaceThermostatRuntime`, `InterfaceCycleScheduler`). |
+| [`versatile_thermostat`](../../versatile_thermostat/) | Cœur VTherm (référence : `ThermostatOverSwitch`, `UnderlyingSwitch`, `cycle_scheduler.py`).                                                       |
+| [`vtherm_hysteresis`](../../vtherm_hysteresis/)       | **Squelette officiel** à cloner et adapter (factory, handler, config flow, persistance, reload).                                                  |
+| [`vtherm_smartpi`](../../vtherm_smartpi/)             | Référence d'un plugin avancé (sous-paquet `smartpi/`, callbacks de cycle, diagnostics).                                                           |
+| [`Duepi_EVO`](../../Duepi_EVO/)                       | Exemple concret de `climate.poele` ciblable (`hvac_modes=[OFF, HEAT]`, `fan_modes=["1".."5"]`, `set_temperature`).                                |
 
 ### 4.2 Dépendances HA / Python
 
@@ -150,14 +160,15 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph CC["custom_components/vtherm_pellet_stove/"]
-      INIT["__init__.py<br/>(register/unregister factory,<br/>reload des VTherms ciblés)"]
+      INIT["__init__.py<br/>(register/unregister factory,<br/>reload des VTherms ciblés,<br/>forward sensor platform)"]
       MAN["manifest.json<br/>(dependency: versatile_thermostat)"]
       CFG["config_flow.py<br/>(ConfigFlow + OptionsFlow)"]
       CONST["const.py<br/>(DOMAIN, CONF_*, defaults)"]
       FACT["factory.py<br/>PelletRegulationFactory"]
       HAND["handler.py<br/>PelletRegulationHandler"]
+      SENS["sensor.py<br/>PelletDebugSensor<br/>(entité diagnostic)"]
       subgraph PKG["pellet/ (logique métier pure)"]
-        CTRL["controller.py<br/>PelletRegulationController"]
+        CTRL["controller.py<br/>PelletRegulationController<br/>+ logs INFO/WARNING<br/>+ current_phase()<br/>+ get_debug_attributes()"]
         STATE["state.py<br/>PelletState (dataclass)"]
         HYST["hysteresis.py<br/>HysteresisDecider (ON/OFF binaire,<br/>seuils paramétrables)"]
         GUARD["cycle_guard.py<br/>min on/off, cooldown, safety"]
@@ -170,8 +181,10 @@ flowchart TB
 
     CFG --> CONST
     INIT --> FACT
+    INIT --> SENS
     FACT --> HAND
     HAND --> CTRL
+    HAND --> SENS
     HAND --> CONST
     CTRL --> STATE
     CTRL --> HYST
@@ -192,6 +205,7 @@ vtherm_pellet_stove/
 │       ├── const.py
 │       ├── factory.py
 │       ├── handler.py
+│       ├── sensor.py            ← entité de débogage
 │       ├── pellet/
 │       │   ├── __init__.py
 │       │   ├── controller.py
@@ -228,40 +242,40 @@ vtherm_pellet_stove/
 
 #### 6.1.1 Hystérésis (paramétrable)
 
-| Clé | Type | Défaut | Description |
-|---|---|---|---|
-| `hysteresis_on` | float (°C) | 0.5 | Démarrage si `current_temp ≤ target − hysteresis_on`. |
-| `hysteresis_off` | float (°C) | 0.3 | Extinction si `current_temp ≥ target + hysteresis_off`. |
-| `min_on_percent` | float [0..1] | 0.0 | Sortie quand l'algorithme demande OFF. |
-| `max_on_percent` | float [0..1] | 1.0 | Sortie quand l'algorithme demande ON. |
+| Clé              | Type         | Défaut | Description                                             |
+| ---------------- | ------------ | ------ | ------------------------------------------------------- |
+| `hysteresis_on`  | float (°C)   | 0.5    | Démarrage si `current_temp ≤ target − hysteresis_on`.   |
+| `hysteresis_off` | float (°C)   | 0.3    | Extinction si `current_temp ≥ target + hysteresis_off`. |
+| `min_on_percent` | float [0..1] | 0.0    | Sortie quand l'algorithme demande OFF.                  |
+| `max_on_percent` | float [0..1] | 1.0    | Sortie quand l'algorithme demande ON.                   |
 
 > Les bornes de saisie (`min`, `max`, `step`) sont définies dans le `config_flow` (cf. §10), strictement à l'image de [`vtherm_hysteresis/config_flow.py`](../../vtherm_hysteresis/custom_components/vtherm_hysteresis/config_flow.py).
 
 #### 6.1.2 Garde-fous pellet
 
-| Clé | Type | Défaut | Description |
-|---|---|---|---|
-| `min_on_duration_min` | int (min) | 30 | Durée minimale de marche avant extinction autorisée. |
-| `min_off_duration_min` | int (min) | 20 | Durée minimale d'arrêt avant rallumage. |
-| `cooldown_duration_min` | int (min) | 5 | Délai d'observation après ordre OFF, ajouté à `min_off_duration_min`. |
-| `safety_room_temp` | float (°C) | 26.0 | Température ambiante au-delà de laquelle OFF immédiat (override des verrous temporels). |
+| Clé                     | Type       | Défaut | Description                                                                             |
+| ----------------------- | ---------- | ------ | --------------------------------------------------------------------------------------- |
+| `min_on_duration_min`   | int (min)  | 30     | Durée minimale de marche avant extinction autorisée.                                    |
+| `min_off_duration_min`  | int (min)  | 20     | Durée minimale d'arrêt avant rallumage.                                                 |
+| `cooldown_duration_min` | int (min)  | 5      | Délai d'observation après ordre OFF, ajouté à `min_off_duration_min`.                   |
+| `safety_room_temp`      | float (°C) | 26.0   | Température ambiante au-delà de laquelle OFF immédiat (override des verrous temporels). |
 
 #### 6.1.3 Pilotage de puissance (optionnel)
 
-| Clé | Type | Défaut | Description |
-|---|---|---|---|
-| `power_control_enabled` | bool | true | Active le pilotage du niveau de puissance. |
-| `power_control_attribute` | enum | `fan_mode` | `fan_mode` ou `preset_mode` selon le poêle. |
-| `power_levels` | list[str] | `["1","2","3","4","5"]` | Liste ordonnée des valeurs admissibles (du plus faible au plus fort). |
-| `power_default_level_index` | int | 2 | Index par défaut quand on allume sans info de pente. |
-| `power_boost_enabled` | bool | true | Active le boost (max) après changement de consigne. |
-| `power_boost_duration_min` | int | 15 | Durée du boost. |
+| Clé                         | Type      | Défaut                  | Description                                                           |
+| --------------------------- | --------- | ----------------------- | --------------------------------------------------------------------- |
+| `power_control_enabled`     | bool      | true                    | Active le pilotage du niveau de puissance.                            |
+| `power_control_attribute`   | enum      | `fan_mode`              | `fan_mode` ou `preset_mode` selon le poêle.                           |
+| `power_levels`              | list[str] | `["1","2","3","4","5"]` | Liste ordonnée des valeurs admissibles (du plus faible au plus fort). |
+| `power_default_level_index` | int       | 2                       | Index par défaut quand on allume sans info de pente.                  |
+| `power_boost_enabled`       | bool      | true                    | Active le boost (max) après changement de consigne.                   |
+| `power_boost_duration_min`  | int       | 15                      | Durée du boost.                                                       |
 
 #### 6.1.4 Identification
 
-| Clé | Type | Description |
-|---|---|---|
-| `target_vtherm_unique_id` | str | Unique ID du VTherm cible (entrée per-thermostat) ou absent (entrée globale). |
+| Clé                       | Type | Description                                                                   |
+| ------------------------- | ---- | ----------------------------------------------------------------------------- |
+| `target_vtherm_unique_id` | str  | Unique ID du VTherm cible (entrée per-thermostat) ou absent (entrée globale). |
 
 ### 6.2 État persistant (`Store`)
 
@@ -400,15 +414,15 @@ Indépendant du calcul d'`on_percent`. Calculé en parallèle dans le handler, a
 
 Mapping par défaut (table éditable dans le code, exposable plus tard en option) :
 
-| `delta_T = target − current` | `slope` (°C/h) | Index niveau |
-|---|---|---|
-| ≥ +2.0 | n'importe | dernier (max) |
-| +1.0 .. +2.0 | < +0.3 | avant-dernier |
-| +1.0 .. +2.0 | ≥ +0.3 | médian sup. |
-| +0.3 .. +1.0 | < +0.2 | médian |
-| +0.3 .. +1.0 | ≥ +0.2 | médian inf. |
-| -0.3 .. +0.3 | n'importe | premier (min) |
-| < -0.3 | n'importe | aucun (poêle OFF de toute façon) |
+| `delta_T = target − current` | `slope` (°C/h) | Index niveau                     |
+| ---------------------------- | -------------- | -------------------------------- |
+| ≥ +2.0                       | n'importe      | dernier (max)                    |
+| +1.0 .. +2.0                 | < +0.3         | avant-dernier                    |
+| +1.0 .. +2.0                 | ≥ +0.3         | médian sup.                      |
+| +0.3 .. +1.0                 | < +0.2         | médian                           |
+| +0.3 .. +1.0                 | ≥ +0.2         | médian inf.                      |
+| -0.3 .. +0.3                 | n'importe      | premier (min)                    |
+| < -0.3                       | n'importe      | aucun (poêle OFF de toute façon) |
 
 Le niveau effectif est `power_levels[index]`. Aucun appel n'est émis si la valeur courante est déjà la bonne (lecture du state HA de l'entité poêle).
 
@@ -490,14 +504,14 @@ stateDiagram-v2
 
 ## 9. Contrats `vtherm_api` utilisés
 
-| Symbole | Usage |
-|---|---|
-| `VThermAPI.register_prop_algorithm(factory)` | Enregistrement avec `factory.name == "pellet_regulation"`. |
-| `VThermAPI.unregister_prop_algorithm(name)` | Au `async_unload_entry` quand plus aucune entry. |
-| `InterfacePropAlgorithmFactory` | Implémenté par `PelletRegulationFactory`. |
-| `InterfacePropAlgorithmHandler` | Implémenté par `PelletRegulationHandler`. |
-| `InterfaceThermostatRuntime` | Source : `target_temperature`, `current_temperature`, `last_temperature_slope`, `vtherm_hvac_mode`, `entry_infos`, `hass`, `cycle_scheduler`, `is_device_active`. |
-| `InterfaceCycleScheduler` | Pilotage on/off : `start_cycle(hvac_mode, on_percent, force)`. Callbacks `register_cycle_start_callback` / `register_cycle_end_callback` posés (utiles pour mesure de puissance réalisée plus tard). |
+| Symbole                                      | Usage                                                                                                                                                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VThermAPI.register_prop_algorithm(factory)` | Enregistrement avec `factory.name == "pellet_regulation"`.                                                                                                                                           |
+| `VThermAPI.unregister_prop_algorithm(name)`  | Au `async_unload_entry` quand plus aucune entry.                                                                                                                                                     |
+| `InterfacePropAlgorithmFactory`              | Implémenté par `PelletRegulationFactory`.                                                                                                                                                            |
+| `InterfacePropAlgorithmHandler`              | Implémenté par `PelletRegulationHandler`.                                                                                                                                                            |
+| `InterfaceThermostatRuntime`                 | Source : `target_temperature`, `current_temperature`, `last_temperature_slope`, `vtherm_hvac_mode`, `entry_infos`, `hass`, `cycle_scheduler`, `is_device_active`.                                    |
+| `InterfaceCycleScheduler`                    | Pilotage on/off : `start_cycle(hvac_mode, on_percent, force)`. Callbacks `register_cycle_start_callback` / `register_cycle_end_callback` posés (utiles pour mesure de puissance réalisée plus tard). |
 
 ### 9.1 Contrat exposé sur `thermostat.prop_algorithm`
 
@@ -572,11 +586,11 @@ VTherm liste dynamiquement les algorithmes via `api.list_prop_algorithms()` (cf.
 
 ### 11.1 Niveaux
 
-| Niveau | Cible | Outils |
-|---|---|---|
-| Unitaire | `HysteresisDecider`, `CycleGuard`, `PowerMapper`, `PelletState`, `PelletRegulationController.calculate` | `pytest`, sans HA. |
-| Intégration handler | `PelletRegulationHandler` avec faux `InterfaceThermostatRuntime` + faux `InterfaceCycleScheduler` | `pytest`, `unittest.mock`. |
-| Config flow | Scénarios global / per-thermostat / options / erreurs | `pytest-homeassistant-custom-component`. |
+| Niveau              | Cible                                                                                                   | Outils                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Unitaire            | `HysteresisDecider`, `CycleGuard`, `PowerMapper`, `PelletState`, `PelletRegulationController.calculate` | `pytest`, sans HA.                       |
+| Intégration handler | `PelletRegulationHandler` avec faux `InterfaceThermostatRuntime` + faux `InterfaceCycleScheduler`       | `pytest`, `unittest.mock`.               |
+| Config flow         | Scénarios global / per-thermostat / options / erreurs                                                   | `pytest-homeassistant-custom-component`. |
 
 ### 11.2 Scénarios fonctionnels minimaux
 
@@ -601,32 +615,32 @@ GitHub Actions calqué sur [`vtherm_hysteresis/.github/workflows`](../../vtherm_
 
 ### 12.1 Sprint 0 — Squelette
 
-- [ ] `pyproject.toml`, `requirements_{dev,test}.txt`, `hacs.json`, `LICENSE`, `README{,.fr}.md`, `CHANGELOG.md`.
-- [ ] `manifest.json` (domain `vtherm_pellet_stove`, dependency `versatile_thermostat`, version `0.0.1`).
-- [ ] `const.py` :
+- [x] `pyproject.toml`, `requirements_{dev,test}.txt`, `hacs.json`, `LICENSE`, `README{,.fr}.md`, `CHANGELOG.md`.
+- [x] `manifest.json` (domain `vtherm_pellet_stove`, dependency `versatile_thermostat`, version `0.0.1`).
+- [x] `const.py` :
   - `DOMAIN = "vtherm_pellet_stove"`
   - `PROP_FUNCTION_PELLET_REGULATION = "pellet_regulation"`
   - toutes les clés `CONF_*` du §6.1 + `DEFAULT_OPTIONS`.
-- [ ] `__init__.py` (register/unregister factory + reload).
-- [ ] `factory.py` (`PelletRegulationFactory`, `name = "pellet_regulation"`).
-- [ ] `handler.py` (lifecycle minimal, no-op de calcul).
-- [ ] `translations/{en,fr}.json` (titres + champs).
-- [ ] `brand/{icon,logo}.png` (placeholders).
+- [x] `__init__.py` (register/unregister factory + reload).
+- [x] `factory.py` (`PelletRegulationFactory`, `name = "pellet_regulation"`).
+- [x] `handler.py` (lifecycle minimal, no-op de calcul).
+- [x] `translations/{en,fr}.json` (titres + champs).
+- [x] `brand/{icon,logo}.png` (placeholders).
 - [ ] CI GitHub Actions (lint, tests, hacs validate).
 
 ### 12.2 Sprint 1 — Logique métier
 
-- [ ] `pellet/state.py` (dataclass `PelletState`, `restore_state`/`save_state`).
-- [ ] `pellet/hysteresis.py` (`HysteresisDecider` ON/OFF binaire avec `hysteresis_on/off` paramétrables).
-- [ ] `pellet/cycle_guard.py` (`can_turn_on`, `can_turn_off`, sécurité override).
-- [ ] `pellet/power_mapper.py` (table mapping + `choose_level_index`).
-- [ ] `pellet/boost.py`.
-- [ ] `pellet/controller.py` (orchestration §7, expose contrat `prop_algorithm`).
-- [ ] Tests unitaires couvrant scénarios §11.2 (1..6, 8, 9).
+- [x] `pellet/state.py` (dataclass `PelletState`, `restore_state`/`save_state`).
+- [x] `pellet/hysteresis.py` (`HysteresisDecider` ON/OFF binaire avec `hysteresis_on/off` paramétrables).
+- [x] `pellet/cycle_guard.py` (`can_turn_on`, `can_turn_off`, sécurité override).
+- [x] `pellet/power_mapper.py` (table mapping + `choose_level_index`).
+- [x] `pellet/boost.py`.
+- [x] `pellet/controller.py` (orchestration §7, expose contrat `prop_algorithm`).
+- [x] Tests unitaires couvrant scénarios §11.2 (1..6, 8, 9).
 
 ### 12.3 Sprint 2 — Intégration HA
 
-- [ ] Compléter `handler.py` :
+- [x] Compléter `handler.py` :
   - `init_algorithm` : lecture config effective, instanciation controller, `Store`.
   - `async_added_to_hass` : restore.
   - `async_startup` : `on_state_changed(True)`.
@@ -637,10 +651,19 @@ GitHub Actions calqué sur [`vtherm_hysteresis/.github/workflows`](../../vtherm_
     3. (si `power_control_enabled`) `set_fan_mode/set_preset_mode` sur underlying climate,
     4. `update_custom_attributes`, `async_write_ha_state`, `store.async_save`.
   - `should_publish_intermediate`, `remove`.
-- [ ] `config_flow.py` (ConfigFlow + OptionsFlow, schéma factorisé).
+- [x] `config_flow.py` (ConfigFlow + OptionsFlow, schéma factorisé).
 - [ ] Tests handler + config flow (scénarios 7 et 10).
 
-### 12.4 Sprint 3 — Documentation & release
+### 12.4 Sprint 2b — Observabilité (**complété**)
+
+- [x] Logs `INFO` dans `controller.py` pour les décisions importantes (§15).
+- [x] Log `WARNING` pour la condition de sécurité.
+- [x] `sensor.py` : entité `PelletDebugSensor` (catégorie `DIAGNOSTIC`).
+- [x] `__init__.py` : forward de la plateforme `sensor` sur l'entrée globale.
+- [x] `handler.py` : création du capteur dans `async_added_to_hass`, mise à jour dans `control_heating`.
+- [x] Traductions FR/EN pour l'entité capteur.
+
+### 12.5 Sprint 3 — Documentation & release
 
 - [ ] `documentation/{en,fr}/vtherm_pellet_stove.md` (utilisateur, exemple complet `over_switch` + `vswitch_on/off`).
 - [ ] `documentation/{en,fr}/technical_doc.md` (synthèse de ce document).
@@ -648,26 +671,25 @@ GitHub Actions calqué sur [`vtherm_hysteresis/.github/workflows`](../../vtherm_
 - [ ] `CHANGELOG.md` 0.1.0.
 - [ ] Tag + publication HACS.
 
-### 12.5 Backlog (post-v0.1)
+### 12.6 Backlog (post-v0.1)
 
-- [ ] Diagnostics HA.
+- [ ] Diagnostics HA (`async_get_config_entry_diagnostics`).
 - [ ] Apprentissage adaptatif `delta_T/min` par niveau.
 - [ ] Détection d'erreur poêle (`unavailable`, `error`, alarmes).
-- [ ] Capteur dérivé `sensor.<vtherm>_pellet_state`.
 - [ ] Carte Lovelace (sur le modèle de [`vtherm_smartpi/cards`](../../vtherm_smartpi/cards/)).
 
 ---
 
 ## 13. Risques et points d'attention
 
-| Risque | Impact | Mitigation |
-|---|---|---|
-| Le `cycle_scheduler` peut générer du hachage si `cycle_min` est court alors que `on_percent ∈ {0,1}`. | Court-cycles destructeurs. | Documenter `cycle_min ≥ min_on_duration_min + min_off_duration_min` dans le `README`. Garde-fous internes empêchent quand même les bascules. |
-| L'utilisateur configure mal `vswitch_on/off`. | Le poêle ne réagit pas. | Documenter explicitement `set_hvac_mode/hvac_mode:heat` et `set_hvac_mode/hvac_mode:off`. Fournir un exemple complet dans `documentation/`. |
-| `power_levels` ne correspond pas aux `fan_modes` réels du poêle. | Erreur HA `Invalid fan mode`. | Valider à l'init en lisant l'attribut `fan_modes` du climat sous-jacent ; logger un warning et désactiver le pilotage si mismatch. |
-| Plusieurs entités underlying. | Plusieurs `set_fan_mode` en parallèle. | Itérer mais garder une trace par entity_id du dernier niveau envoyé pour éviter le spam. |
-| Mise à jour des options pendant chauffe. | Reload casse le cycle. | Garde-fous internes (`min_on_duration`) basés sur `last_on_at` persisté → robuste au reload. |
-| Restart HA. | État perdu. | `Store` + restore en `async_added_to_hass` ; alignement final via lecture du state HA réel de l'entity poêle. |
+| Risque                                                                                                | Impact                                 | Mitigation                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Le `cycle_scheduler` peut générer du hachage si `cycle_min` est court alors que `on_percent ∈ {0,1}`. | Court-cycles destructeurs.             | Documenter `cycle_min ≥ min_on_duration_min + min_off_duration_min` dans le `README`. Garde-fous internes empêchent quand même les bascules. |
+| L'utilisateur configure mal `vswitch_on/off`.                                                         | Le poêle ne réagit pas.                | Documenter explicitement `set_hvac_mode/hvac_mode:heat` et `set_hvac_mode/hvac_mode:off`. Fournir un exemple complet dans `documentation/`.  |
+| `power_levels` ne correspond pas aux `fan_modes` réels du poêle.                                      | Erreur HA `Invalid fan mode`.          | Valider à l'init en lisant l'attribut `fan_modes` du climat sous-jacent ; logger un warning et désactiver le pilotage si mismatch.           |
+| Plusieurs entités underlying.                                                                         | Plusieurs `set_fan_mode` en parallèle. | Itérer mais garder une trace par entity_id du dernier niveau envoyé pour éviter le spam.                                                     |
+| Mise à jour des options pendant chauffe.                                                              | Reload casse le cycle.                 | Garde-fous internes (`min_on_duration`) basés sur `last_on_at` persisté → robuste au reload.                                                 |
+| Restart HA.                                                                                           | État perdu.                            | `Store` + restore en `async_added_to_hass` ; alignement final via lecture du state HA réel de l'entity poêle.                                |
 
 ---
 
@@ -680,6 +702,71 @@ GitHub Actions calqué sur [`vtherm_hysteresis/.github/workflows`](../../vtherm_
 - **Hystérésis paramétrable** : double seuil `hysteresis_on` / `hysteresis_off` qui rend l'algorithme `pellet_regulation` un cas dégénéré d'algorithme proportionnel (sortie binaire).
 - **Cycle scheduler** : composant VTherm qui gère le rythme marche/arrêt de l'underlying selon `cycle_min` et `on_percent`.
 - **Boost** : montée temporaire au niveau de puissance maximal après changement de consigne.
+- **Phase** : vue synthétique de l'état du poêle, dérivée de `is_heating` et des horodatages `last_on_at`/`last_off_at` : `off`, `igniting`, `burning`, `cooldown`.
+
+---
+
+## 15. Observabilité — Logs et entité de débogage
+
+### 15.1 Stratégie de logs
+
+Les logs suivent la hiérarchie de niveaux Python standard :
+
+| Niveau    | Condition                                                   | Exemple de message                                                                                            |
+| --------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `WARNING` | Condition de sécurité haute température → extinction forcée | `Salon - SÉCURITÉ: température ambiante 27.2°C ≥ 26.0°C → extinction forcée après 45 min de chauffe`          |
+| `INFO`    | Allumage réel (transition OFF → ON)                         | `Salon - Allumage du poêle (reason=below_on_threshold) après 27 min d'arrêt [target=20.0 current=19.3]`       |
+| `INFO`    | Extinction réelle (transition ON → OFF)                     | `Salon - Extinction du poêle (reason=above_off_threshold) après 32 min de chauffe [target=20.0 current=20.5]` |
+| `INFO`    | Extinction retardée par garde-fou `min_on`                  | `Salon - Extinction reportée (garde-fou min_on): 15/30 min de chauffe`                                        |
+| `INFO`    | Allumage retardé par garde-fou `min_off + cooldown`         | `Salon - Allumage reporté (garde-fou min_off+cooldown): 18/25 min d'arrêt`                                    |
+| `DEBUG`   | Tous les appels à `calculate()` (chaque cycle)              | `PelletController - calculate target=20.0 current=19.3 on_percent=1.0 …`                                      |
+
+Les logs `INFO` et `WARNING` sont **uniquement émis lors d'une transition d'état ou d'un blocage**. Il n'y a aucun log `INFO` sur les cycles répétitifs sans changement (anti-spam).
+
+### 15.2 Entité de débogage `PelletDebugSensor`
+
+Fichier : `sensor.py` — classe `PelletDebugSensor(SensorEntity)`
+
+| Propriété HA             | Valeur                                                    |
+| ------------------------ | --------------------------------------------------------- |
+| Catégorie                | `DIAGNOSTIC`                                              |
+| Clé de traduction        | `pellet_debug`                                            |
+| `native_value` (état)    | Phase courante : `off`, `igniting`, `burning`, `cooldown` |
+| `extra_state_attributes` | Voir tableau ci-dessous                                   |
+| `should_poll`            | `False` (push depuis le handler après chaque cycle)       |
+| `unique_id`              | `vtherm_pellet_stove_<vtherm_uid>_debug`                  |
+
+Attributs exposés :
+
+| Attribut                 | Description                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `phase`                  | Phase courante (identique à la valeur d'état)                                  |
+| `is_heating`             | `true` si le poêle est actif selon l'état interne                              |
+| `on_percent`             | Valeur `on_percent` de la dernière décision (0.0 ou max)                       |
+| `current_level`          | Niveau de puissance actif (ex. `"3"`)                                          |
+| `current_level_index`    | Index du niveau (0-based)                                                      |
+| `elapsed_on_min`         | Minutes écoulées depuis le dernier allumage (quand `is_heating=true`)          |
+| `elapsed_off_min`        | Minutes écoulées depuis la dernière extinction (quand `is_heating=false`)      |
+| `next_action_allowed_at` | ISO 8601 : moment où l'action suivante (allumage ou extinction) sera autorisée |
+| `last_reason`            | Raison de la dernière décision de `calculate()`                                |
+| `last_on_at`             | ISO 8601 horodatage du dernier allumage                                        |
+| `last_off_at`            | ISO 8601 horodatage de la dernière extinction                                  |
+| `boost_active`           | `true` si un boost puissance est en cours                                      |
+| `boost_until`            | ISO 8601 fin du boost actif (si applicable)                                    |
+| `hysteresis_on`          | Seuil d'allumage configuré (°C)                                                |
+| `hysteresis_off`         | Seuil d'extinction configuré (°C)                                              |
+| `min_on_duration_min`    | Durée minimale de chauffe configurée (min)                                     |
+| `min_off_duration_min`   | Durée minimale d'arrêt configurée (min)                                        |
+| `cooldown_duration_min`  | Cooldown configuré (min)                                                       |
+| `safety_room_temp`       | Température de sécurité configurée (°C)                                        |
+
+### 15.3 Cycle de vie du capteur
+
+1. **Setup entry** (`__init__.py`) : pour l'entrée globale (unique_id = `DOMAIN`), la plateforme `sensor` est forwardée → `sensor.async_setup_entry` stocke le callback `async_add_entities`.
+2. **Démarrage VTherm** → `handler.async_added_to_hass()` crée un `PelletDebugSensor` et l'enregistre via le callback stocké.
+3. **Cycle de régulation** (`control_heating`) → `sensor.update_from_controller(controller, now)` met à jour l'état et déclenche `async_write_ha_state()`.
+4. **Arrêt/reload handler** → `handler.remove()` détache la référence au capteur (le capteur reste dans HA en affichant son dernier état connu).
+5. **Redémarrage HA** → nouveau handler → re-attachement automatique (même `unique_id`, l'entrée du registre est réutilisée).
 
 ---
 

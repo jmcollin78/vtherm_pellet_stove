@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import asyncio
 
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.storage import Store
 from homeassistant.util import slugify
+from vtherm_api.log_collector import get_vtherm_logger
 
 from .const import (
     CONF_COOLDOWN_DURATION_MIN,
@@ -27,17 +27,19 @@ from .const import (
     CONF_POWER_LEVELS,
     CONF_SAFETY_ROOM_TEMP,
     CONF_TARGET_VTHERM,
+    DATA_SENSOR_ADD_CB,
     DEFAULT_OPTIONS,
     DOMAIN,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
 from .pellet.controller import PelletRegulationController
+from .sensor import PelletDebugSensor
 
 if TYPE_CHECKING:
     from vtherm_api.interfaces import InterfaceCycleScheduler, InterfaceThermostatRuntime
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = get_vtherm_logger(__name__)
 
 # Key from versatile_thermostat const.py for the list of underlying entity IDs.
 _CONF_UNDERLYING_LIST = "underlying_entity_ids"
@@ -81,6 +83,7 @@ class PelletRegulationHandler:
         self._store: Store | None = None
         self._opts: dict[str, Any] = dict(DEFAULT_OPTIONS)
         self._last_applied_level_index: int | None = None
+        self._debug_sensor: PelletDebugSensor | None = None
 
     # ------------------------------------------------------------------
     # InterfacePropAlgorithmHandler contract
@@ -94,6 +97,7 @@ class PelletRegulationHandler:
         self._opts = _resolve_options(hass, vtherm_uid)
 
         self._controller = PelletRegulationController(
+            name=self._thermostat.name,
             hysteresis_on=float(self._opts[CONF_HYSTERESIS_ON]),
             hysteresis_off=float(self._opts[CONF_HYSTERESIS_OFF]),
             min_on_percent=float(self._opts[CONF_MIN_ON_PERCENT]),
@@ -144,6 +148,25 @@ class PelletRegulationHandler:
                 self._controller.last_reason,
             )
 
+        # Créer et enregistrer le capteur de débogage
+        self._debug_sensor = PelletDebugSensor(self._thermostat)
+        hass = self._thermostat.hass
+        domain_data = hass.data.setdefault(DOMAIN, {})
+        cb = domain_data.get(DATA_SENSOR_ADD_CB)
+        if cb is not None:
+            cb([self._debug_sensor], update_before_add=True)
+            _LOGGER.debug(
+                "%s - async_added_to_hass: capteur de débogage enregistré",
+                self._thermostat.name,
+            )
+        else:
+            domain_data.setdefault("pending_sensors", []).append(self._debug_sensor)
+            _LOGGER.debug(
+                "%s - async_added_to_hass: capteur de débogage mis en attente "
+                "(platform sensor pas encore prête)",
+                self._thermostat.name,
+            )
+
     async def async_startup(self) -> None:
         """Run startup actions after thermostat initialisation."""
         await self.on_state_changed(True)
@@ -164,6 +187,10 @@ class PelletRegulationHandler:
                     loop.create_task(coro)
             except RuntimeError:
                 pass
+
+        # Détacher le capteur de débogage (l'entité reste dans HA mais n'est
+        # plus alimentée jusqu'au prochain démarrage du handler).
+        self._debug_sensor = None
 
     async def control_heating(
         self,
@@ -224,6 +251,10 @@ class PelletRegulationHandler:
         # 6. Persist controller state.
         if self._store is not None:
             await self._store.async_save(self._controller.save_state())
+
+        # 7. Update the debug sensor.
+        if self._debug_sensor is not None:
+            self._debug_sensor.update_from_controller(self._controller, now)
 
         _LOGGER.debug(
             "%s - control_heating: on_percent=%.1f reason=%s hvac_mode=%s",

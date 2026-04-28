@@ -17,7 +17,8 @@
 8. [État persistant](#8-état-persistant)
 9. [Pilotage du niveau de puissance](#9-pilotage-du-niveau-de-puissance)
 10. [Stratégie de tests](#10-stratégie-de-tests)
-11. [Ajouter une nouvelle fonctionnalité](#11-ajouter-une-nouvelle-fonctionnalité)
+11. [Observabilité — Logs et entité de débogage](#11-observabilité--logs-et-entité-de-débogage)
+12. [Ajouter une nouvelle fonctionnalité](#12-ajouter-une-nouvelle-fonctionnalité)
 
 ---
 
@@ -52,15 +53,16 @@ Il est conçu exclusivement pour les thermostats VTherm en mode `over_switch` ci
 
 ```
 custom_components/vtherm_pellet_stove/
-├── __init__.py          # setup / teardown, enregistrement factory, reload VTherms
+├── __init__.py          # setup / teardown, enregistrement factory, reload VTherms, forward sensor platform
 ├── manifest.json        # manifeste HA (dépendance : versatile_thermostat)
 ├── config_flow.py       # ConfigFlow (global + par thermostat) + OptionsFlow
 ├── const.py             # DOMAIN, constantes CONF_*, DEFAULT_OPTIONS
 ├── factory.py           # PelletRegulationFactory (InterfacePropAlgorithmFactory)
 ├── handler.py           # PelletRegulationHandler (InterfacePropAlgorithmHandler)
+├── sensor.py            # PelletDebugSensor — entité de débogage (DIAGNOSTIC)
 └── pellet/              # Logique métier pure Python (sans dépendance HA)
     ├── __init__.py
-    ├── controller.py    # PelletRegulationController — orchestration
+    ├── controller.py    # PelletRegulationController — orchestration + logs INFO/WARNING
     ├── state.py         # PelletState — dataclass persisté
     ├── hysteresis.py    # HysteresisDecider — décision binaire ON/OFF
     ├── cycle_guard.py   # CycleGuard — durées min marche/arrêt + cooldown
@@ -77,6 +79,7 @@ custom_components/vtherm_pellet_stove/
 - Appelle `VThermAPI.register_prop_algorithm(PelletRegulationFactory())` au `async_setup` / `async_setup_entry`.
 - Appelle `VThermAPI.unregister_prop_algorithm("pellet_regulation")` quand la dernière entrée du plugin est supprimée.
 - Déclenche `_reload_pellet_vtherms()` après un changement d'options pour que les nouveaux paramètres s'appliquent immédiatement.
+- Pour l'entrée globale uniquement, forward la plateforme `sensor` (`async_forward_entry_setups`) permettant la création dynamique des capteurs de débogage.
 - Ignore le reload pendant le démarrage de HA pour ne pas perturber la séquence de restauration de VTherm.
 
 ### `factory.py` — `PelletRegulationFactory`
@@ -338,7 +341,53 @@ def _patch_ha_store():
 
 ---
 
-## 11. Ajouter une nouvelle fonctionnalité
+## 11. Observabilité — Logs et entité de débogage
+
+### 11.1 Logs INFO/WARNING dans `controller.py`
+
+Le `PelletRegulationController` émet des logs HA selon la grille suivante :
+
+| Niveau    | Condition                                         | Exemple                                                                                              |
+| --------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `WARNING` | Sécurité haute temp → extinction forcée           | `Salon - SÉCURITÉ: température ambiante 27.2°C ≥ 26.0°C → extinction forcée après 45 min de chauffe` |
+| `INFO`    | Allumage réel (OFF → ON)                          | `Salon - Allumage du poêle (reason=below_on_threshold) après 27 min d'arrêt [target=20.0 …]`         |
+| `INFO`    | Extinction réelle (ON → OFF)                      | `Salon - Extinction du poêle (reason=above_off_threshold) après 32 min de chauffe [target=20.0 …]`   |
+| `INFO`    | Extinction reportée par garde-fou `min_on`        | `Salon - Extinction reportée (garde-fou min_on): 15/30 min de chauffe`                               |
+| `INFO`    | Allumage reporté par garde-fou `min_off+cooldown` | `Salon - Allumage reporté (garde-fou min_off+cooldown): 18/25 min d'arrêt`                           |
+| `DEBUG`   | Chaque appel à `calculate()`                      | `PelletController - calculate target=20.0 current=19.3 on_percent=1.0 …`                             |
+
+Les logs `INFO` et `WARNING` ne sont émis que lors d'un changement d'état effectif ou d'un blocage (anti-spam).
+
+Pour les voir dans HA, configurer le niveau du logger dans `configuration.yaml` :
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.vtherm_pellet_stove: info
+```
+
+### 11.2 Entité de débogage `sensor` (DIAGNOSTIC)
+
+Chaque VTherm utilisant `pellet_regulation` crée automatiquement une entité capteur :
+
+- **entity_id** : `sensor.<nom_vtherm>_pellet_regulation_debug` (auto-généré par HA)
+- **Catégorie** : `DIAGNOSTIC` (visible dans l'onglet Diagnostics de l'appareil)
+- **Valeur d'état** : phase courante — `off`, `igniting`, `burning`, `cooldown`
+
+**Phases** :
+
+| Phase      | Condition                                                              |
+| ---------- | ---------------------------------------------------------------------- |
+| `off`      | `is_heating = false` ET garde-fou min_off+cooldown écoulé              |
+| `igniting` | `is_heating = true` ET durée < `min_on_duration_min` (chauffe récente) |
+| `burning`  | `is_heating = true` ET durée ≥ `min_on_duration_min`                   |
+| `cooldown` | `is_heating = false` ET garde-fou min_off+cooldown en cours            |
+
+L'entité expose également tous les paramètres actifs (hystérésis, garde-fous, dernières décisions) en attributs, facilitant le débogage directement depuis l'interface HA.
+
+---
+
+## 12. Ajouter une nouvelle fonctionnalité
 
 ### Ajouter un nouveau paramètre de configuration
 

@@ -1,5 +1,78 @@
 {
     "title": "Versatile Thermostat Poêle à Pellets",
+    "entity": {
+        "sensor": {
+            "pellet_debug": {
+                "name": "Débogage Régulation Pellet",
+                "state": {
+                    "off": "Éteint",
+                    "igniting": "Allumage",
+                    "burning": "Chauffe",
+                    "cooldown": "Refroidissement",
+                    "unknown": "Inconnu"
+                },
+                "state_attributes": {
+                    "phase": {
+                        "name": "Phase"
+                    },
+                    "is_heating": {
+                        "name": "En chauffe"
+                    },
+                    "on_percent": {
+                        "name": "On percent"
+                    },
+                    "current_level": {
+                        "name": "Niveau courant"
+                    },
+                    "current_level_index": {
+                        "name": "Index niveau courant"
+                    },
+                    "elapsed_on_min": {
+                        "name": "Temps de chauffe écoulé (min)"
+                    },
+                    "elapsed_off_min": {
+                        "name": "Temps d'arrêt écoulé (min)"
+                    },
+                    "next_action_allowed_at": {
+                        "name": "Prochaine action autorisée"
+                    },
+                    "last_reason": {
+                        "name": "Dernière raison"
+                    },
+                    "last_on_at": {
+                        "name": "Dernier allumage"
+                    },
+                    "last_off_at": {
+                        "name": "Dernière extinction"
+                    },
+                    "boost_active": {
+                        "name": "Boost actif"
+                    },
+                    "boost_until": {
+                        "name": "Boost jusqu'à"
+                    },
+                    "hysteresis_on": {
+                        "name": "Hystérésis allumage (°C)"
+                    },
+                    "hysteresis_off": {
+                        "name": "Hystérésis extinction (°C)"
+                    },
+                    "min_on_duration_min": {
+                        "name": "Durée min chauffe (min)"
+                    },
+                    "min_off_duration_min": {
+                        "name": "Durée min arrêt (min)"
+                    },
+                    "cooldown_duration_min": {
+                        "name": "Cooldown (min)"
+                    },
+                    "safety_room_temp": {
+                        "name": "Temp. sécurité ambiante (°C)"
+                    }
+                }
+            }
+        }
+    },
     "config": {
         "step": {
             "global": {

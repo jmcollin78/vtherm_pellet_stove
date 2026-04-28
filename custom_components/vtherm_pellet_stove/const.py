@@ -114,5 +114,8 @@ DEFAULT_OPTIONS: dict = {
 
 DATA_FACTORY_REGISTERED = "factory_registered"
 
+#: Key in hass.data[DOMAIN] holding the async_add_entities callback for the sensor platform.
+DATA_SENSOR_ADD_CB = "sensor_add_entities"
+
 STORAGE_VERSION = 1
 STORAGE_KEY = "vtherm_pellet_stove.{}"
