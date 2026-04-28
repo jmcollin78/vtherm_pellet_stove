@@ -21,7 +21,10 @@
                     "columns": "full"
                   },
                   "entity": "sensor.rad_simulator_room_temperature",
-                  "state_content": "last_changed",
+                  "state_content": [
+                    "state",
+                    "last_changed"
+                  ],
                   "vertical": false,
                   "features": [
                     {
@@ -36,7 +39,10 @@
                     "columns": "full"
                   },
                   "entity": "sensor.rad_simulator_external_temperature",
-                  "state_content": "last_changed",
+                  "state_content": [
+                    "state",
+                    "last_changed"
+                  ],
                   "vertical": false,
                   "features_position": "bottom"
                 }
@@ -71,7 +77,7 @@
                       "entity": "binary_sensor.poele_actif"
                     }
                   ],
-                  "hours_to_show": 1
+                  "hours_to_show": 4
                 }
               ]
             },
