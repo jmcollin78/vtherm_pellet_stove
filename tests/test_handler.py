@@ -29,6 +29,8 @@ from custom_components.vtherm_pellet_stove.const import (
     CONF_POWER_LEVELS,
     CONF_SAFETY_ROOM_TEMP,
     CONF_TARGET_VTHERM,
+    DATA_DEBUG_SENSORS_PREFIX,
+    DATA_SENSOR_ADD_CB,
     DEFAULT_OPTIONS,
     DOMAIN,
 )
@@ -358,6 +360,207 @@ class TestScenario7OptionsUpdate:
         second_call_count = hass.services.async_call.await_count
 
         assert second_call_count == first_call_count  # pas d'appel supplémentaire
+
+
+# ===========================================================================
+# Scénario 12 — Capteur de debug réutilisé après rechargement du handler
+# ===========================================================================
+
+
+def _make_hass_with_data(entries: list | None = None):
+    """Construit un faux hass avec un vrai dict hass.data (nécessaire pour les tests de sensor)."""
+    hass = _make_hass(entries)
+    hass.data = {}
+    # Remettre setdefault pour que ça fonctionne sur le vrai dict
+    return hass
+
+
+class TestScenario12DebugSensorReuse:
+    """Vérifie que le capteur de debug est réutilisé entre les recharges de handler.
+
+    Après une modification d'options, VTherm est rechargé, créant un nouveau
+    PelletRegulationHandler. async_added_to_hass() ne doit PAS tenter
+    d'enregistrer un nouveau PelletDebugSensor (collision unique_id), mais
+    récupérer celui déjà stocké dans hass.data et lui pousser les nouvelles
+    valeurs via update_from_controller().
+    """
+
+    async def test_first_handler_creates_sensor_and_stores_it(self):
+        """Premier handler : crée le capteur et le stocke dans hass.data."""
+        hass = _make_hass_with_data()
+        thermostat = _make_thermostat(hass, unique_id="vt_uid")
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        cb = MagicMock()
+        hass.data.setdefault(DOMAIN, {})[DATA_SENSOR_ADD_CB] = cb
+
+        await handler.async_added_to_hass()
+
+        # Le capteur doit être créé et stocké.
+        sensor_key = DATA_DEBUG_SENSORS_PREFIX + "vt_uid"
+        assert sensor_key in hass.data[DOMAIN]
+        assert hass.data[DOMAIN][sensor_key] is handler._debug_sensor
+        # async_add_entities doit avoir été appelé une fois.
+        cb.assert_called_once()
+
+    async def test_second_handler_reuses_existing_sensor(self):
+        """Second handler (après reload) : réutilise le capteur existant sans ré-enregistrement."""
+        hass = _make_hass_with_data()
+        sensor_key = DATA_DEBUG_SENSORS_PREFIX + "vt_uid"
+
+        # Simule un capteur déjà enregistré par le premier handler.
+        fake_existing_sensor = MagicMock()
+        hass.data.setdefault(DOMAIN, {})[sensor_key] = fake_existing_sensor
+
+        cb = MagicMock()
+        hass.data[DOMAIN][DATA_SENSOR_ADD_CB] = cb
+
+        thermostat = _make_thermostat(hass, unique_id="vt_uid")
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        await handler.async_added_to_hass()
+
+        # Le handler doit pointer vers le capteur existant.
+        assert handler._debug_sensor is fake_existing_sensor
+        # async_add_entities NE doit PAS être rappelé (pas de ré-enregistrement).
+        cb.assert_not_called()
+
+    async def test_debug_sensor_updated_with_new_options_after_reload(self):
+        """Après reload, update_from_controller est appelé avec le nouveau contrôleur."""
+        entry = _make_entry(
+            data={CONF_MIN_ON_DURATION_MIN: 45, CONF_MIN_OFF_DURATION_MIN: 25},
+            unique_id=DOMAIN,
+        )
+        hass = _make_hass_with_data(entries=[entry])
+        thermostat = _make_thermostat(
+            hass,
+            unique_id="vt_uid",
+            target_temperature=20.0,
+            current_temperature=18.0,
+        )
+
+        # --- Premier handler ---
+        handler1 = PelletRegulationHandler(thermostat)
+        handler1.init_algorithm()
+        _mock_store(handler1)
+
+        cb = MagicMock()
+        hass.data.setdefault(DOMAIN, {})[DATA_SENSOR_ADD_CB] = cb
+
+        await handler1.async_added_to_hass()
+        real_sensor = handler1._debug_sensor  # sensor réellement créé
+
+        # Simule update_from_controller (normalement appelé par control_heating)
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 1, 15, 20, 0, tzinfo=timezone.utc)
+        real_sensor.update_from_controller(handler1._controller, now)
+
+        # Le guard du handler1 a les valeurs d'origine.
+        assert handler1._controller._guard.min_on_duration_min == 45
+
+        # --- Simulation d'un reload : remove du handler1, nouveau handler ---
+        handler1.remove()  # libère la référence locale ; le sensor reste dans hass.data
+
+        handler2 = PelletRegulationHandler(thermostat)
+        handler2.init_algorithm()
+        _mock_store(handler2)
+        await handler2.async_added_to_hass()
+
+        # handler2 doit récupérer le même objet capteur.
+        assert handler2._debug_sensor is real_sensor
+        # async_add_entities ne doit pas être rappelé.
+        assert cb.call_count == 1  # appelé uniquement lors du premier handler
+
+        # Après la mise à jour, le capteur expose les valeurs du nouveau contrôleur.
+        handler2._debug_sensor.update_from_controller(handler2._controller, now)
+        attrs = handler2._debug_sensor.extra_state_attributes
+        assert attrs["min_on_duration_min"] == 45  # valeur inchangée ici
+        assert attrs["min_off_duration_min"] == 25
+
+
+# ===========================================================================
+# Scénario 11 — Reconfiguration : options effacées → data mis à jour utilisé
+# ===========================================================================
+
+
+class TestScenario11Reconfigure:
+    """Vérifie que _resolve_options lit les nouvelles values après une reconfiguration.
+
+    Lors d'une reconfiguration (async_step_reconfigure), le flux enregistre les
+    nouvelles valeurs dans ``entry.data`` et vide ``entry.options`` (``{}``).
+    ``_resolve_options`` doit alors ignorer les anciennes options et utiliser
+    exclusivement ``entry.data``.
+    """
+
+    def test_cleared_options_fall_back_to_data(self):
+        """Après reconfigure, entry.options={} → _resolve_options lit entry.data."""
+        # Simule un entry ayant des *anciennes* options (issues d'un options-flow)
+        # puis une reconfiguration qui les a vidées et a mis à jour entry.data.
+        entry = _make_entry(
+            data={CONF_HYSTERESIS_ON: 1.5, CONF_HYSTERESIS_OFF: 0.8},
+            options={},  # vidé par async_update_reload_and_abort(options={})
+            unique_id=DOMAIN,
+        )
+        hass = _make_hass(entries=[entry])
+        opts = _resolve_options(hass, "any_uid")
+        assert opts[CONF_HYSTERESIS_ON] == pytest.approx(1.5)
+        assert opts[CONF_HYSTERESIS_OFF] == pytest.approx(0.8)
+
+    def test_reconfigure_data_overrides_previous_options(self):
+        """Reconfigure met à jour data ; options vidées → nouvelles valeurs lues."""
+        # Avant reconfigure : data={hyst=0.5}, options={hyst=1.0}
+        # Après reconfigure  : data={hyst=2.0}, options={}
+        entry = _make_entry(
+            data={CONF_HYSTERESIS_ON: 2.0},
+            options={},  # vidé par la reconfiguration
+            unique_id=DOMAIN,
+        )
+        hass = _make_hass(entries=[entry])
+        opts = _resolve_options(hass, "uid")
+        # Doit utiliser la nouvelle valeur de data, pas l'ancienne options
+        assert opts[CONF_HYSTERESIS_ON] == pytest.approx(2.0)
+
+    def test_per_thermostat_reconfigure_preserves_target(self):
+        """Reconfigure per-thermostat : CONF_TARGET_VTHERM reste dans data."""
+        per_entry = _make_entry(
+            data={CONF_TARGET_VTHERM: "vt_uid", CONF_HYSTERESIS_ON: 1.8},
+            options={},  # vidé par reconfigure
+            unique_id=f"{DOMAIN}-vt_uid",
+        )
+        hass = _make_hass(entries=[per_entry])
+        opts = _resolve_options(hass, "vt_uid")
+        assert opts[CONF_HYSTERESIS_ON] == pytest.approx(1.8)
+
+    def test_handler_reads_reconfigured_data_on_init(self):
+        """Après reconfigure, le nouveau handler lit entry.data (options vides)."""
+        entry = _make_entry(
+            data={CONF_HYSTERESIS_ON: 0.9, CONF_HYSTERESIS_OFF: 0.6},
+            options={},
+            unique_id=DOMAIN,
+        )
+        hass = _make_hass(entries=[entry])
+        thermostat = _make_thermostat(hass)
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+
+        assert handler._controller._hysteresis.hysteresis_on == pytest.approx(0.9)
+        assert handler._controller._hysteresis.hysteresis_off == pytest.approx(0.6)
+
+    def test_options_still_override_data_when_non_empty(self):
+        """Si entry.options est non-vide (options-flow), il prime toujours sur data."""
+        entry = _make_entry(
+            data={CONF_HYSTERESIS_ON: 0.5},
+            options={CONF_HYSTERESIS_ON: 1.3},
+            unique_id=DOMAIN,
+        )
+        hass = _make_hass(entries=[entry])
+        opts = _resolve_options(hass, "uid")
+        assert opts[CONF_HYSTERESIS_ON] == pytest.approx(1.3)
 
 
 # ===========================================================================

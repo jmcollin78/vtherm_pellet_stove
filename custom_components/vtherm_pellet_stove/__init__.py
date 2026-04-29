@@ -154,8 +154,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload VT thermostats when plugin options change so new params apply."""
-    await _reload_pellet_vtherms(hass, source_entry=entry)
+    """Reload the config entry when options change so new params are picked up.
+
+    Reloading the entry is the standard HA pattern: ``async_setup_entry`` then
+    calls ``_reload_pellet_vtherms`` which re-initialises all affected VTherm
+    handlers with the freshly-saved options.
+    """
+
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -172,8 +178,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data.pop(DATA_SENSOR_ADD_CB, None)
 
     # Unregister the factory only when the last plugin entry is removed.
+    # When it IS the last entry, also reload the VTherm thermostats so they
+    # detect that pellet_regulation is no longer available.  During a normal
+    # entry reload (triggered by an options update) other plugin entries are
+    # still present, so the factory stays registered and no VTherm reload is
+    # needed here — async_setup_entry will handle it.
     if not [key for key in data if key != DATA_FACTORY_REGISTERED]:
         _unregister_factory(hass)
+        await _reload_pellet_vtherms(hass)
 
-    await _reload_pellet_vtherms(hass)
     return True

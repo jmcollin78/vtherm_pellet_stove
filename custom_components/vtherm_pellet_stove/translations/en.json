@@ -114,7 +114,29 @@
             }
         },
         "abort": {
-            "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed."
+            "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed.",
+            "reconfigure_successful": "Configuration updated and integration reloaded."
+        },
+        "step": {
+            "reconfigure": {
+                "title": "Pellet Stove — reconfigure",
+                "description": "Update the regulation parameters. The integration will reload automatically so the new values take effect immediately.",
+                "data": {
+                    "hysteresis_on": "Heating start threshold (°C below target)",
+                    "hysteresis_off": "Heating stop threshold (°C above target)",
+                    "min_on_percent": "on_percent value when OFF (0.0\u20131.0)",
+                    "max_on_percent": "on_percent value when ON (0.0\u20131.0)",
+                    "min_on_duration_min": "Minimum burn duration (minutes)",
+                    "min_off_duration_min": "Minimum off duration (minutes)",
+                    "cooldown_duration_min": "Cooldown added to min_off (minutes)",
+                    "safety_room_temp": "Safety cut-off room temperature (\u00b0C)",
+                    "power_control_enabled": "Enable power level control",
+                    "power_control_attribute": "Power level attribute (fan_mode / preset_mode)",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost after setpoint increase",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            }
         },
         "error": {
             "invalid_entity": "The selected climate entity cannot be linked to a VT unique identifier."

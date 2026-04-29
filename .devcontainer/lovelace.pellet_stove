@@ -45,6 +45,25 @@
                   ],
                   "vertical": false,
                   "features_position": "bottom"
+                },
+                {
+                  "type": "tile",
+                  "grid_options": {
+                    "columns": "full"
+                  },
+                  "entity": "input_number.fake_outdoor_temperature",
+                  "state_content": [
+                    "state",
+                    "last_changed"
+                  ],
+                  "vertical": false,
+                  "features_position": "bottom",
+                  "features": [
+                    {
+                      "type": "numeric-input",
+                      "style": "buttons"
+                    }
+                  ]
                 }
               ]
             },
@@ -173,6 +192,18 @@
                   "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
                   "attribute": "hysteresis_off",
                   "name": "Hysteresis off"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "min_on_duration_min",
+                  "name": "Min On (min)"
+                },
+                {
+                  "type": "entity",
+                  "entity": "sensor.pellet_stove_vtherm_pellet_debogage_regulation_pellet",
+                  "attribute": "min_off_duration_min",
+                  "name": "Min Off (min)"
                 },
                 {
                   "type": "entity",

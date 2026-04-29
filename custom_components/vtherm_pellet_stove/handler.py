@@ -27,6 +27,7 @@ from .const import (
     CONF_POWER_LEVELS,
     CONF_SAFETY_ROOM_TEMP,
     CONF_TARGET_VTHERM,
+    DATA_DEBUG_SENSORS_PREFIX,
     DATA_SENSOR_ADD_CB,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -148,24 +149,45 @@ class PelletRegulationHandler:
                 self._controller.last_reason,
             )
 
-        # Restore the persistent state and register the debug sensor
-        self._debug_sensor = PelletDebugSensor(self._thermostat)
+        # Attach to (or create) the persistent debug sensor for this VTherm.
+        #
+        # The sensor is stored in hass.data so it survives handler recreations.
+        # Re-registering a new entity with the same unique_id on the same
+        # platform causes HA to silently reject it, leaving the stale old
+        # entity in the UI. Instead we always reuse the existing object: the
+        # new handler simply grabs the reference and starts pushing updates to
+        # it via update_from_controller(), which calls async_write_ha_state().
         hass = self._thermostat.hass
+        vtherm_uid = self._thermostat.unique_id
         domain_data = hass.data.setdefault(DOMAIN, {})
-        cb = domain_data.get(DATA_SENSOR_ADD_CB)
-        if cb is not None:
-            cb([self._debug_sensor], update_before_add=True)
+        sensor_key = DATA_DEBUG_SENSORS_PREFIX + (vtherm_uid or DOMAIN)
+
+        existing_sensor: PelletDebugSensor | None = domain_data.get(sensor_key)
+        if existing_sensor is not None:
+            # Reuse the already-registered HA entity.
+            self._debug_sensor = existing_sensor
             _LOGGER.debug(
-                "%s - async_added_to_hass: debug sensor registered",
+                "%s - async_added_to_hass: reusing existing debug sensor",
                 self._thermostat.name,
             )
         else:
-            domain_data.setdefault("pending_sensors", []).append(self._debug_sensor)
-            _LOGGER.debug(
-                "%s - async_added_to_hass: debug sensor queued "
-                "(sensor platform not yet ready)",
-                self._thermostat.name,
-            )
+            # First time: create and register a fresh sensor.
+            self._debug_sensor = PelletDebugSensor(self._thermostat)
+            domain_data[sensor_key] = self._debug_sensor
+            cb = domain_data.get(DATA_SENSOR_ADD_CB)
+            if cb is not None:
+                cb([self._debug_sensor], update_before_add=True)
+                _LOGGER.debug(
+                    "%s - async_added_to_hass: debug sensor registered",
+                    self._thermostat.name,
+                )
+            else:
+                domain_data.setdefault("pending_sensors", []).append(self._debug_sensor)
+                _LOGGER.debug(
+                    "%s - async_added_to_hass: debug sensor queued "
+                    "(sensor platform not yet ready)",
+                    self._thermostat.name,
+                )
 
     async def async_startup(self) -> None:
         """Run startup actions after thermostat initialisation."""

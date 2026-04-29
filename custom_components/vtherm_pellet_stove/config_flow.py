@@ -223,6 +223,36 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_user_schema(dict(DEFAULT_OPTIONS)),
         )
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+        """Allow reconfiguring an existing entry.
+
+        Works for both the global-defaults entry and per-thermostat entries.
+        On submit the entry's data is updated (preserving ``CONF_TARGET_VTHERM``
+        when present) and any stale ``entry.options`` are cleared so that
+        ``_resolve_options`` always reads the freshly-saved values.
+        The entry is then reloaded, which in turn reloads the affected VTherm
+        thermostat(s) via ``async_setup_entry`` → ``_reload_pellet_vtherms``.
+        """
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            # Merge new values into data while keeping CONF_TARGET_VTHERM (if
+            # present) so per-thermostat entries still target the right VTherm.
+            # Clearing options ensures _resolve_options falls back to data.
+            new_data = {**entry.data, **user_input}
+            return self.async_update_reload_and_abort(
+                entry,
+                data=new_data,
+                options={},
+            )
+
+        defaults = dict(DEFAULT_OPTIONS)
+        defaults.update(entry.options or entry.data)
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=build_options_schema(defaults),
+        )
+
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return the options flow handler."""
