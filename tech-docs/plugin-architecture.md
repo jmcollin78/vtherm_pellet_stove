@@ -476,7 +476,8 @@ sequenceDiagram
     H->>C: calculate(target, current, slope, hvac_mode, now)
     C-->>H: Decision(on_percent ∈ {0,1}, reason)
     H->>VT: thermostat.prop_algorithm = controller (on_percent à jour)
-    H->>SCH: scheduler.start_cycle(hvac_mode, on_percent, force)
+    H->>SCH: scheduler.start_cycle(hvac_mode, on_percent, force or transition)
+    Note over H,SCH: transition=True si transition réelle ON↔OFF<br/>(arrêt/démarrage immédiat sans attendre fin de cycle)
     SCH->>SW: turn_on() ou turn_off() selon on_percent
     SW->>POELE: services.async_call("climate","set_hvac_mode", hvac_mode=heat|off)<br/>(via vswitch_on / vswitch_off)
     H->>POELE: (optionnel) services.async_call("climate","set_fan_mode", fan_mode=level)
@@ -647,7 +648,8 @@ GitHub Actions calqué sur [`vtherm_hysteresis/.github/workflows`](../../vtherm_
   - `on_scheduler_ready` : mémoriser le scheduler + register cycle callbacks (no-op v0.1).
   - `control_heating` :
     1. appel `controller.calculate(...)`,
-    2. `scheduler.start_cycle(hvac_mode, on_percent, force)`,
+    2. détection de transition réelle (`was_heating` vs `is_heating` après calculate),
+    3. `scheduler.start_cycle(hvac_mode, on_percent, force or transition_off or transition_on)` — force immédiat si ON↔OFF réel,
     3. (si `power_control_enabled`) `set_fan_mode/set_preset_mode` sur underlying climate,
     4. `update_custom_attributes`, `async_write_ha_state`, `store.async_save`.
   - `should_publish_intermediate`, `remove`.
@@ -717,6 +719,8 @@ Les logs suivent la hiérarchie de niveaux Python standard :
 | `WARNING` | Condition de sécurité haute température → extinction forcée | `Salon - SÉCURITÉ: température ambiante 27.2°C ≥ 26.0°C → extinction forcée après 45 min de chauffe`          |
 | `INFO`    | Allumage réel (transition OFF → ON)                         | `Salon - Allumage du poêle (reason=below_on_threshold) après 27 min d'arrêt [target=20.0 current=19.3]`       |
 | `INFO`    | Extinction réelle (transition ON → OFF)                     | `Salon - Extinction du poêle (reason=above_off_threshold) après 32 min de chauffe [target=20.0 current=20.5]` |
+| `INFO`    | Transition ON→OFF → arrêt immédiat du cycle scheduler       | `Salon - ON→OFF transition detected (reason=above_off_threshold): forcing immediate cycle stop`               |
+| `INFO`    | Transition OFF→ON → démarrage immédiat du cycle scheduler   | `Salon - OFF→ON transition detected (reason=below_on_threshold): forcing immediate cycle start`               |
 | `INFO`    | Extinction retardée par garde-fou `min_on`                  | `Salon - Extinction reportée (garde-fou min_on): 15/30 min de chauffe`                                        |
 | `INFO`    | Allumage retardé par garde-fou `min_off + cooldown`         | `Salon - Allumage reporté (garde-fou min_off+cooldown): 18/25 min d'arrêt`                                    |
 | `DEBUG`   | Tous les appels à `calculate()` (chaque cycle)              | `PelletController - calculate target=20.0 current=19.3 on_percent=1.0 …`                                      |

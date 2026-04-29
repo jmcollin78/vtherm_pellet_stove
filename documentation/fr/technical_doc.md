@@ -90,16 +90,16 @@ Factory simple : `name = "pellet_regulation"`, `create(thermostat) → PelletReg
 
 Adaptateur au cycle de vie HA. Implémente `InterfacePropAlgorithmHandler` :
 
-| Méthode               | Responsabilité                                                                                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init_algorithm`      | Résoudre les options effectives (`_resolve_options`), construire `PelletRegulationController`, créer le `Store`.                                                            |
-| `async_added_to_hass` | Charger l'état persistant depuis le `Store`, appeler `controller.restore_state`.                                                                                            |
-| `async_startup`       | Déclencher `on_state_changed(True)` → première itération `control_heating`.                                                                                                 |
-| `remove`              | Planifier `store.async_save` via `hass.async_create_task`.                                                                                                                  |
-| `control_heating`     | Appeler `controller.calculate`, mettre à jour `thermostat.prop_algorithm`, appeler `scheduler.start_cycle`, appliquer le niveau de puissance, publier l'état HA, persister. |
-| `on_state_changed`    | Transférer à `control_heating` si `changed=True`.                                                                                                                           |
-| `on_scheduler_ready`  | Stocker la référence du scheduler, enregistrer les callbacks de cycle.                                                                                                      |
-| `_apply_power_level`  | Appeler `climate.set_fan_mode / set_preset_mode` sur les entités climate sous-jacentes. Anti-spam : ignorer si le niveau n'a pas changé.                                    |
+| Méthode               | Responsabilité                                                                                                                                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init_algorithm`      | Résoudre les options effectives (`_resolve_options`), construire `PelletRegulationController`, créer le `Store`.                                                                                                                                                                |
+| `async_added_to_hass` | Charger l'état persistant depuis le `Store`, appeler `controller.restore_state`.                                                                                                                                                                                                |
+| `async_startup`       | Déclencher `on_state_changed(True)` → première itération `control_heating`.                                                                                                                                                                                                     |
+| `remove`              | Planifier `store.async_save` via `hass.async_create_task`.                                                                                                                                                                                                                      |
+| `control_heating`     | Appeler `controller.calculate`, détecter les transitions réelles d'état (ON↔OFF), mettre à jour `thermostat.prop_algorithm`, appeler `scheduler.start_cycle` avec `force=True` lors de toute transition réelle, appliquer le niveau de puissance, publier l'état HA, persister. |
+| `on_state_changed`    | Transférer à `control_heating` si `changed=True`.                                                                                                                                                                                                                               |
+| `on_scheduler_ready`  | Stocker la référence du scheduler, enregistrer les callbacks de cycle.                                                                                                                                                                                                          |
+| `_apply_power_level`  | Appeler `climate.set_fan_mode / set_preset_mode` sur les entités climate sous-jacentes. Anti-spam : ignorer si le niveau n'a pas changé.                                                                                                                                        |
 
 **Résolution des options** (`_resolve_options`) :
 
@@ -237,7 +237,9 @@ VTherm.async_control_heating
   └─ handler.control_heating(timestamp, force)
        ├─ controller.calculate(target, current, slope, hvac_mode, now)
        ├─ thermostat.prop_algorithm = controller
-       ├─ scheduler.start_cycle(hvac_mode, on_percent, force)
+       ├─ scheduler.start_cycle(hvac_mode, on_percent, force or transition)
+       │    │  transition=True lors d'une transition réelle ON→OFF ou OFF→ON
+       │    │  (force l'arrêt/démarrage immédiat sans attendre la fin du cycle)
        │    └─ UnderlyingSwitch.turn_on/off
        │         └─ hass.services.async_call("climate", "set_hvac_mode", ...)
        ├─ _apply_power_level()   (si activé et is_heating=True)
@@ -354,6 +356,8 @@ Le `PelletRegulationController` émet des logs HA selon la grille suivante :
 | `INFO`    | Extinction réelle (ON → OFF)                      | `Salon - Extinction du poêle (reason=above_off_threshold) après 32 min de chauffe [target=20.0 …]`   |
 | `INFO`    | Extinction reportée par garde-fou `min_on`        | `Salon - Extinction reportée (garde-fou min_on): 15/30 min de chauffe`                               |
 | `INFO`    | Allumage reporté par garde-fou `min_off+cooldown` | `Salon - Allumage reporté (garde-fou min_off+cooldown): 18/25 min d'arrêt`                           |
+| `INFO`    | Transition ON→OFF → arrêt immédiat forcé          | `Salon - ON→OFF transition detected (reason=above_off_threshold): forcing immediate cycle stop`      |
+| `INFO`    | Transition OFF→ON → démarrage immédiat forcé      | `Salon - OFF→ON transition detected (reason=below_on_threshold): forcing immediate cycle start`      |
 | `DEBUG`   | Chaque appel à `calculate()`                      | `PelletController - calculate target=20.0 current=19.3 on_percent=1.0 …`                             |
 
 Les logs `INFO` et `WARNING` ne sont émis que lors d'un changement d'état effectif ou d'un blocage (anti-spam).

@@ -763,3 +763,232 @@ class TestScenario10RestoreAfterRestart:
         _, on_percent, _force = scheduler.start_cycle.call_args[0]
         assert on_percent == pytest.approx(0.0)
         assert handler._controller.last_reason == "safety"
+
+
+# ===========================================================================
+# Scénario 13 — Transition ON→OFF force l'arrêt immédiat du cycle
+# ===========================================================================
+
+
+class TestScenario13ForceOnToOffTransition:
+    """Vérifie que start_cycle est appelé avec force=True lors d'une transition ON→OFF.
+
+    Contexte : quand le contrôleur détecte une transition réelle ON→OFF
+    (ex. above_off_threshold ou safety), VTherm doit arrêter le cycle
+    *immédiatement* sans attendre la fin du cycle en cours. Cela nécessite
+    que control_heating passe force=True au scheduler lors de ce changement
+    d'état.
+    """
+
+    async def test_above_off_threshold_forces_scheduler_stop(self):
+        """Transition ON→OFF (above_off_threshold) → start_cycle appelé avec force=True."""
+        # Poêle allumé il y a 65 min → min_on_duration (30 min) écoulée.
+        sixty_five_min_ago = _now() - timedelta(minutes=65)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": sixty_five_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=17.0,
+            current_temperature=19.9,  # ≥ 17.0 + 0.3 → above_off_threshold
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(0.0)
+        assert handler._controller.last_reason == "above_off_threshold"
+        # Force doit être True pour stopper le cycle immédiatement.
+        assert force is True
+
+    async def test_locked_on_does_not_force(self):
+        """Quand le garde-fous maintient ON (locked_on), force reste False."""
+        # Poêle allumé il y a 1 min → min_on_duration (30 min) non écoulée.
+        one_min_ago = _now() - timedelta(minutes=1)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": one_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=17.0,
+            current_temperature=19.9,  # dépasserait le seuil mais garde-fous bloque
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        # locked_on : on reste en chauffe, is_heating inchangé → pas de force.
+        assert on_percent == pytest.approx(1.0)
+        assert handler._controller.last_reason == "locked_on"
+        assert force is False
+
+    async def test_already_off_no_force(self):
+        """Si le poêle était déjà éteint et reste éteint, force=False."""
+        stored_data = {
+            "is_heating": False,
+            "current_level_index": None,
+            "last_on_at": None,
+            "last_off_at": (_now() - timedelta(minutes=60)).isoformat(),
+            "last_reason": "above_off_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=17.0,
+            current_temperature=19.9,  # reste au-dessus → hold OFF
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(0.0)
+        # Pas de transition → force=False
+        assert force is False
+
+    async def test_safety_transition_also_forces(self):
+        """Transition ON→OFF par sécurité haute température → force=True aussi."""
+        one_min_ago = _now() - timedelta(minutes=1)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": one_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        entry = _make_entry(data={CONF_SAFETY_ROOM_TEMP: 26.0}, unique_id=DOMAIN)
+        hass = _make_hass(entries=[entry])
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=27.0,  # ≥ safety_room_temp → force OFF
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(0.0)
+        assert handler._controller.last_reason == "safety"
+        # Même pour safety, la transition ON→OFF doit forcer l'arrêt immédiat.
+        assert force is True
+
+    async def test_off_to_on_transition_forces_scheduler_start(self):
+        """Transition OFF→ON (cooldown écoulé + below_on_threshold) → force=True."""
+        # Poêle éteint il y a 90 min → min_off + cooldown (30+10=40 min) écoulée.
+        ninety_min_ago = _now() - timedelta(minutes=90)
+        stored_data = {
+            "is_heating": False,
+            "current_level_index": None,
+            "last_on_at": None,
+            "last_off_at": ninety_min_ago.isoformat(),
+            "last_reason": "above_off_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=18.5,  # ≤ 20.0 − 0.5 → below_on_threshold
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(1.0)
+        assert handler._controller.last_reason == "below_on_threshold"
+        # Force doit être True pour démarrer le cycle immédiatement.
+        assert force is True
+
+    async def test_locked_off_does_not_force(self):
+        """Quand le garde-fous maintient OFF (locked_off), force reste False."""
+        # Poêle éteint il y a 5 min → min_off + cooldown (30+10=40 min) non écoulée.
+        five_min_ago = _now() - timedelta(minutes=5)
+        stored_data = {
+            "is_heating": False,
+            "current_level_index": None,
+            "last_on_at": None,
+            "last_off_at": five_min_ago.isoformat(),
+            "last_reason": "above_off_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=18.5,  # demanderait ON mais garde-fous bloque
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        # locked_off : is_heating inchangé (False) → pas de transition → pas de force.
+        assert on_percent == pytest.approx(0.0)
+        assert handler._controller.last_reason == "locked_off"
+        assert force is False

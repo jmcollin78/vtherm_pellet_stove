@@ -242,6 +242,7 @@ class PelletRegulationHandler:
             return
 
         # 1. Compute on_percent via the pellet controller.
+        was_heating = self._controller.is_heating
         on_percent = self._controller.calculate(
             target_temp=target,
             current_temp=current,
@@ -254,8 +255,28 @@ class PelletRegulationHandler:
         self._thermostat.prop_algorithm = self._controller
 
         # 3. Forward result to the cycle scheduler.
+        # Force immediate application on any real state transition so the stove
+        # reacts without waiting for the current cycle to finish naturally:
+        #   • ON→OFF : stove stops right away (e.g. above_off_threshold)
+        #   • OFF→ON : stove restarts right away (e.g. cooldown period elapsed)
+        transition_off = was_heating and not self._controller.is_heating
+        transition_on = not was_heating and self._controller.is_heating
+        if transition_off:
+            _LOGGER.info(
+                "%s - ON→OFF transition detected (reason=%s): forcing immediate cycle stop",
+                self._thermostat.name,
+                self._controller.last_reason,
+            )
+        elif transition_on:
+            _LOGGER.info(
+                "%s - OFF→ON transition detected (reason=%s): forcing immediate cycle start",
+                self._thermostat.name,
+                self._controller.last_reason,
+            )
         if self._scheduler is not None:
-            await self._scheduler.start_cycle(hvac_mode, on_percent, force)
+            await self._scheduler.start_cycle(
+                hvac_mode, on_percent, force or transition_off or transition_on
+            )
         else:
             _LOGGER.debug(
                 "%s - control_heating: scheduler not yet available",

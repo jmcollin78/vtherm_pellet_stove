@@ -96,7 +96,7 @@ HA lifecycle adapter. Implements `InterfacePropAlgorithmHandler`:
 | `async_added_to_hass` | Load persistent state from `Store`, call `controller.restore_state`.                                                                         |
 | `async_startup`       | Trigger `on_state_changed(True)` → first `control_heating` iteration.                                                                        |
 | `remove`              | Schedule `store.async_save` via `hass.async_create_task`.                                                                                    |
-| `control_heating`     | Call `controller.calculate`, update `thermostat.prop_algorithm`, call `scheduler.start_cycle`, apply power level, publish HA state, persist. |
+| `control_heating`     | Call `controller.calculate`, detect real state transitions (ON↔OFF), update `thermostat.prop_algorithm`, call `scheduler.start_cycle` with `force=True` on any real transition, apply power level, publish HA state, persist. |
 | `on_state_changed`    | Forward to `control_heating` when `changed=True`.                                                                                            |
 | `on_scheduler_ready`  | Store scheduler reference, register cycle callbacks.                                                                                         |
 | `_apply_power_level`  | Call `climate.set_fan_mode / set_preset_mode` on underlying climate entities. Anti-spam: skip if level unchanged.                            |
@@ -237,7 +237,9 @@ VTherm.async_control_heating
   └─ handler.control_heating(timestamp, force)
        ├─ controller.calculate(target, current, slope, hvac_mode, now)
        ├─ thermostat.prop_algorithm = controller
-       ├─ scheduler.start_cycle(hvac_mode, on_percent, force)
+       ├─ scheduler.start_cycle(hvac_mode, on_percent, force or transition)
+       │    │  transition=True when a real ON→OFF or OFF→ON state change occurred
+       │    │  (forces immediate cycle stop/start without waiting for cycle end)
        │    └─ UnderlyingSwitch.turn_on/off
        │         └─ hass.services.async_call("climate", "set_hvac_mode", ...)
        ├─ _apply_power_level()   (if enabled and is_heating)
@@ -354,6 +356,8 @@ The `PelletRegulationController` emits HA-compatible logs according to this matr
 | `INFO`    | Real shutdown (ON → OFF transition)               | `Living Room - Stove off (reason=above_off_threshold) after 32 min of heating [target=20.0 …]` |
 | `INFO`    | Shutdown delayed by `min_on` guard-rail           | `Living Room - Shutdown delayed (min_on guard): 15/30 min of heating`                          |
 | `INFO`    | Ignition delayed by `min_off+cooldown` guard-rail | `Living Room - Ignition delayed (min_off+cooldown guard): 18/25 min off`                       |
+| `INFO`    | ON→OFF transition → immediate cycle stop forced   | `Living Room - ON→OFF transition detected (reason=above_off_threshold): forcing immediate cycle stop` |
+| `INFO`    | OFF→ON transition → immediate cycle start forced  | `Living Room - OFF→ON transition detected (reason=below_on_threshold): forcing immediate cycle start` |
 | `DEBUG`   | Every `calculate()` call                          | `PelletController - calculate target=20.0 current=19.3 on_percent=1.0 …`                       |
 
 `INFO` and `WARNING` logs are only emitted on a state change or a guard-rail block (anti-spam).
