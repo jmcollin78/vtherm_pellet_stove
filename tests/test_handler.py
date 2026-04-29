@@ -12,6 +12,7 @@ Scénario 10 : Redémarrage HA avec ``is_heating=True`` stocké dans le Store �
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -59,7 +60,14 @@ def _make_hass(entries: list | None = None):
     hass = MagicMock()
     hass.config_entries.async_entries = MagicMock(return_value=entries or [])
     hass.services.async_call = AsyncMock()
-    hass.async_create_task = MagicMock()
+
+    def _create_task(coro, **kwargs):
+        """Ferme proprement toute coroutine reçue pour éviter le RuntimeWarning."""
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        return MagicMock()
+
+    hass.async_create_task = MagicMock(side_effect=_create_task)
     return hass
 
 
