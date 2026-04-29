@@ -30,6 +30,7 @@
       data:
         message: Rad vient d'être allumé
         title: Etat du radiateur simulateur
+      enabled: false
     else:
     - action: switch.turn_off
       metadata: {}
@@ -41,4 +42,5 @@
       data:
         message: Rad vient d'être éteint
         title: Etat du radiateur simulateur
+      enabled: false
   mode: single
