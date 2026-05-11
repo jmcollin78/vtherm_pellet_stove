@@ -34,7 +34,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
-from .pellet.controller import PelletRegulationController
+from .pellet.controller import HVAC_MODE_OFF, PelletRegulationController
 from .sensor import PelletDebugSensor
 
 if TYPE_CHECKING:
@@ -148,6 +148,22 @@ class PelletRegulationHandler:
                 self._controller.is_heating,
                 self._controller.last_reason,
             )
+
+            # Guard: if the store says is_heating=True but VTherm is already in
+            # hvac_mode=off, the state is stale (HA shut down between the user
+            # pressing OFF and the handler saving is_heating=False). Correct it
+            # now WITHOUT touching last_off_at so that the min_off+cooldown guard
+            # is not armed at the current time — the user should be able to
+            # switch back to "heat" immediately without waiting up to 60 min.
+            hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
+            if self._controller.is_heating and hvac_mode == HVAC_MODE_OFF:
+                _LOGGER.warning(
+                    "%s - async_added_to_hass: stale is_heating=True detected while "
+                    "hvac_mode=off — correcting to is_heating=False without "
+                    "resetting last_off_at",
+                    self._thermostat.name,
+                )
+                self._controller.state.is_heating = False
 
         # Attach to (or create) the persistent debug sensor for this VTherm.
         #

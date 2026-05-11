@@ -992,3 +992,144 @@ class TestScenario13ForceOnToOffTransition:
         assert on_percent == pytest.approx(0.0)
         assert handler._controller.last_reason == "locked_off"
         assert force is False
+
+
+# ===========================================================================
+# Scénario 14 — Redémarrage avec is_heating=True persisté mais hvac_mode=off
+# ===========================================================================
+
+
+class TestScenario14StaleHeatingOnRestart:
+    """Vérifie que is_heating=True périmé dans le Store ne pose pas last_off_at=now.
+
+    Contexte : si HA se coupe pendant que le poêle chauffait (is_heating=True)
+    et que VTherm a sauvegardé hvac_mode=off (ex. bouton off appuyé juste avant),
+    la restauration recharge is_heating=True depuis le Store. Lors du premier
+    control_heating avec hvac_mode=off, _compute() détecte is_heating=True et
+    pose last_off_at=now → le garde-fous min_off+cooldown est armé à l'instant
+    du redémarrage → si l'utilisateur bascule immédiatement en heat, il attend
+    min_off+cooldown minutes (jusqu'à 1h dans les configs courantes) avant que
+    le poêle ne s'allume.
+
+    La correction attendue : async_startup() doit détecter cette incohérence et
+    corriger is_heating=False SANS toucher last_off_at, afin que le garde-fous
+    ne soit pas armé inutilement.
+    """
+
+    async def test_stale_is_heating_does_not_set_last_off_at(self):
+        """Store is_heating=True + hvac_mode=off → last_off_at ne doit PAS être mis à now."""
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": (_now() - timedelta(minutes=90)).isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="off",  # ← VTherm est en mode off au démarrage
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        # Simule le premier cycle de régulation au démarrage (hvac_mode=off).
+        await handler.control_heating(timestamp=_now())
+
+        # last_off_at ne doit PAS avoir été armé : le Store avait last_off_at=None
+        # et aucune extinction réelle n'a eu lieu pendant cet arrêt.
+        assert handler._controller.state.last_off_at is None
+
+    async def test_stale_is_heating_then_heat_no_locked_off(self):
+        """Après redémarrage (is_heating=True périmé + hvac_mode=off), passer en heat
+        doit allumer immédiatement (reason != locked_off).
+        """
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": (_now() - timedelta(minutes=90)).isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="off",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        # Premier cycle avec hvac_mode=off (simule le startup normal).
+        await handler.control_heating(timestamp=_now())
+
+        # L'utilisateur bascule immédiatement en heat.
+        thermostat.vtherm_hvac_mode = "heat"
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, _force = scheduler.start_cycle.call_args[0]
+        # Le poêle doit s'allumer (ou demander ON) sans attendre 1h.
+        assert on_percent == pytest.approx(1.0)
+        assert handler._controller.last_reason != "locked_off"
+
+    async def test_stale_is_heating_with_existing_last_off_at_preserved(self):
+        """Si le Store a déjà un last_off_at ancien, il doit être conservé tel quel.
+
+        Cas : poêle éteint normalement (last_off_at sauvegardé), puis is_heating
+        sauvegardé True par erreur. La valeur ancienne de last_off_at prime sur
+        toute réinitialisation spurieuse.
+        """
+        old_off_at = _now() - timedelta(hours=24)  # éteint depuis 24h
+        stored_data = {
+            "is_heating": True,  # périmé
+            "current_level_index": None,
+            "last_on_at": (_now() - timedelta(hours=25)).isoformat(),
+            "last_off_at": old_off_at.isoformat(),  # déjà présent
+            "last_reason": "hvac_off",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="off",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        # last_off_at doit rester la valeur d'origine (24h ago), PAS now.
+        assert handler._controller.state.last_off_at == old_off_at
+
+        # Et l'allumage en heat doit être immédiat (24h >> min_off+cooldown).
+        thermostat.vtherm_hvac_mode = "heat"
+        await handler.control_heating(timestamp=_now())
+
+        _, on_percent, _force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(1.0)
+        assert handler._controller.last_reason != "locked_off"
