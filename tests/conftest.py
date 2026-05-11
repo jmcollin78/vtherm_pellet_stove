@@ -24,6 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CUSTOM_COMPONENTS_ROOT = PROJECT_ROOT / "custom_components"
 INTEGRATION_ROOT = CUSTOM_COMPONENTS_ROOT / "vtherm_pellet_stove"
+VERSATILE_THERMOSTAT_ROOT = CUSTOM_COMPONENTS_ROOT / "versatile_thermostat"
 
 
 def _ensure_project_on_path() -> None:
@@ -121,3 +122,4 @@ _ensure_vtherm_api_stubs()
 # Register the custom_components package so that relative imports work.
 _ensure_package_stub("custom_components", CUSTOM_COMPONENTS_ROOT)
 _ensure_package_stub("custom_components.vtherm_pellet_stove", INTEGRATION_ROOT)
+_ensure_package_stub("custom_components.versatile_thermostat", VERSATILE_THERMOSTAT_ROOT)
