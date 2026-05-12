@@ -2,7 +2,7 @@
     "domain": "vtherm_pellet_stove",
     "name": "Versatile Thermostat Pellet Stove",
     "description": "Pellet stove proportional regulation algorithm plugin for Versatile Thermostat",
-    "version": "0.1.0",
+    "version": "0.1.2",
     "config_flow": true,
     "dependencies": [
         "versatile_thermostat"
