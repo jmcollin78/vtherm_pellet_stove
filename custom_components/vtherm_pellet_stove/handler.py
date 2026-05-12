@@ -330,8 +330,7 @@ class PelletRegulationHandler:
             self._thermostat.name,
             changed,
         )
-        if changed:
-            await self.control_heating()
+        await self.control_heating()
 
     def on_scheduler_ready(self, scheduler: "InterfaceCycleScheduler") -> None:
         """Bind the handler to the cycle scheduler once it is available."""

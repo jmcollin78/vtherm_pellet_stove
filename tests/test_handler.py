@@ -994,6 +994,46 @@ class TestScenario13ForceOnToOffTransition:
         assert force is False
 
 
+class TestScenario14ChangedFalseStillRecomputes:
+    """Vérifie que le handler pellet recalcule même quand changed=False."""
+
+    async def test_above_off_threshold_recomputed_when_changed_false(self):
+        """changed=False ne doit pas empêcher une transition ON→OFF immédiate."""
+        sixty_five_min_ago = _now() - timedelta(minutes=65)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": sixty_five_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=17.0,
+            current_temperature=19.9,
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.on_state_changed(False)
+
+        scheduler.start_cycle.assert_awaited_once()
+        _, on_percent, force = scheduler.start_cycle.call_args[0]
+        assert on_percent == pytest.approx(0.0)
+        assert handler._controller.last_reason == "above_off_threshold"
+        assert handler._controller.is_heating is False
+        assert force is True
+
+
 # ===========================================================================
 # Scénario 14 — Redémarrage avec is_heating=True persisté mais hvac_mode=off
 # ===========================================================================
