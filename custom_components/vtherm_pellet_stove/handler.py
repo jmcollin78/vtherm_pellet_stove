@@ -51,6 +51,7 @@ def _resolve_options(hass: Any, vtherm_uid: str | None) -> dict[str, Any]:
 
     Priority: per-thermostat plugin entry > global defaults entry > DEFAULT_OPTIONS.
     """
+    _LOGGER.debug("%s - _resolve_options: start (vtherm_uid=%s)", DOMAIN, vtherm_uid)
     opts: dict[str, Any] = dict(DEFAULT_OPTIONS)
 
     global_entry = None
@@ -64,11 +65,18 @@ def _resolve_options(hass: Any, vtherm_uid: str | None) -> dict[str, Any]:
             per_entry = entry
 
     if global_entry is not None:
+        _LOGGER.debug("%s - _resolve_options: applying global options", DOMAIN)
         opts.update(dict(global_entry.options or global_entry.data))
 
     if per_entry is not None:
+        _LOGGER.debug(
+            "%s - _resolve_options: applying per-thermostat options (target=%s)",
+            DOMAIN,
+            vtherm_uid,
+        )
         opts.update(dict(per_entry.options or per_entry.data))
 
+    _LOGGER.debug("%s - _resolve_options: completed", DOMAIN)
     return opts
 
 
@@ -85,6 +93,7 @@ class PelletRegulationHandler:
         self._opts: dict[str, Any] = dict(DEFAULT_OPTIONS)
         self._last_applied_level_index: int | None = None
         self._debug_sensor: PelletDebugSensor | None = None
+        _LOGGER.debug("%s - __init__: handler created", self._thermostat.name)
 
     # ------------------------------------------------------------------
     # InterfacePropAlgorithmHandler contract
@@ -92,6 +101,7 @@ class PelletRegulationHandler:
 
     def init_algorithm(self) -> None:
         """Initialise the runtime algorithm state."""
+        _LOGGER.debug("%s - init_algorithm: start", self._thermostat.name)
         hass = self._thermostat.hass
         vtherm_uid = self._thermostat.unique_id
 
@@ -136,11 +146,17 @@ class PelletRegulationHandler:
 
     async def async_added_to_hass(self) -> None:
         """Restore persistent state when the thermostat entity is added to HA."""
+        _LOGGER.debug("%s - async_added_to_hass: start", self._thermostat.name)
         if self._controller is None or self._store is None:
+            _LOGGER.debug(
+                "%s - async_added_to_hass: skipped (controller/store not ready)",
+                self._thermostat.name,
+            )
             return
 
         data = await self._store.async_load()
         if data:
+            _LOGGER.debug("%s - async_added_to_hass: persisted data found", self._thermostat.name)
             self._controller.restore_state(data)
             _LOGGER.debug(
                 "%s - async_added_to_hass: restored state is_heating=%s reason=%s",
@@ -164,6 +180,8 @@ class PelletRegulationHandler:
                     self._thermostat.name,
                 )
                 self._controller.state.is_heating = False
+        else:
+            _LOGGER.debug("%s - async_added_to_hass: no persisted data", self._thermostat.name)
 
         # Attach to (or create) the persistent debug sensor for this VTherm.
         #
@@ -207,23 +225,38 @@ class PelletRegulationHandler:
 
     async def async_startup(self) -> None:
         """Run startup actions after thermostat initialisation."""
+        _LOGGER.debug("%s - async_startup: start", self._thermostat.name)
         await self.on_state_changed(True)
 
     def remove(self) -> None:
         """Persist current state and release resources."""
+        _LOGGER.debug("%s - remove: start", self._thermostat.name)
         if self._controller is None or self._store is None:
+            _LOGGER.debug(
+                "%s - remove: skipped (controller/store not ready)",
+                self._thermostat.name,
+            )
             return
 
         coro = self._store.async_save(self._controller.save_state())
         hass = self._thermostat.hass
         if hasattr(hass, "async_create_task"):
             hass.async_create_task(coro)
+            _LOGGER.debug("%s - remove: persistence task scheduled on hass", self._thermostat.name)
         else:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     loop.create_task(coro)
+                    _LOGGER.debug(
+                        "%s - remove: persistence task scheduled on event loop",
+                        self._thermostat.name,
+                    )
             except RuntimeError:
+                _LOGGER.debug(
+                    "%s - remove: no running event loop, persistence deferred",
+                    self._thermostat.name,
+                )
                 pass
 
         # Detach the debug sensor (entity stays in HA showing last known state
@@ -236,12 +269,20 @@ class PelletRegulationHandler:
         force: bool = False,
     ) -> None:
         """Execute one proportional control iteration."""
+        _LOGGER.debug(
+            "%s - control_heating: start (force=%s timestamp=%s)",
+            self._thermostat.name,
+            force,
+            timestamp,
+        )
         if self._controller is None:
             _LOGGER.warning(
                 "%s - control_heating called before init_algorithm, skipping",
                 self._thermostat.name,
             )
             return
+
+        _LOGGER.info("%s - control_heating: running control loop", self._thermostat.name)
 
         now = timestamp if timestamp is not None else datetime.now(timezone.utc)
 
@@ -289,7 +330,18 @@ class PelletRegulationHandler:
                 self._thermostat.name,
                 self._controller.last_reason,
             )
+        else:
+            _LOGGER.debug(
+                "%s - control_heating: no ON/OFF transition (is_heating=%s)",
+                self._thermostat.name,
+                self._controller.is_heating,
+            )
         if self._scheduler is not None:
+            _LOGGER.debug(
+                "%s - control_heating: starting scheduler cycle (force=%s)",
+                self._thermostat.name,
+                force or transition_off or transition_on,
+            )
             await self._scheduler.start_cycle(
                 hvac_mode, on_percent, force or transition_off or transition_on
             )
@@ -301,7 +353,19 @@ class PelletRegulationHandler:
 
         # 4. Apply power level on the underlying climate entity (optional).
         if self._opts.get(CONF_POWER_CONTROL_ENABLED) and self._controller.is_heating:
+            _LOGGER.debug(
+                "%s - control_heating: power control active while heating, applying level",
+                self._thermostat.name,
+            )
             await self._apply_power_level()
+        else:
+            _LOGGER.debug(
+                "%s - control_heating: power level application skipped "
+                "(enabled=%s is_heating=%s)",
+                self._thermostat.name,
+                self._opts.get(CONF_POWER_CONTROL_ENABLED),
+                self._controller.is_heating,
+            )
 
         # 5. Publish HA state.
         self._thermostat.update_custom_attributes()
@@ -309,11 +373,14 @@ class PelletRegulationHandler:
 
         # 6. Persist controller state.
         if self._store is not None:
+            _LOGGER.debug("%s - control_heating: persisting controller state", self._thermostat.name)
             await self._store.async_save(self._controller.save_state())
 
         # 7. Update the debug sensor.
         if self._debug_sensor is not None:
             self._debug_sensor.update_from_controller(self._controller, now)
+        else:
+            _LOGGER.debug("%s - control_heating: debug sensor not available", self._thermostat.name)
 
         _LOGGER.debug(
             "%s - control_heating: on_percent=%.1f reason=%s hvac_mode=%s",
@@ -325,15 +392,12 @@ class PelletRegulationHandler:
 
     async def on_state_changed(self, changed: bool = True) -> None:
         """React to a thermostat state change."""
-        _LOGGER.debug(
-            "%s - on_state_changed changed=%s",
-            self._thermostat.name,
-            changed,
-        )
+        _LOGGER.debug("%s - on_state_changed: start (changed=%s)", self._thermostat.name, changed)
         await self.control_heating()
 
     def on_scheduler_ready(self, scheduler: "InterfaceCycleScheduler") -> None:
         """Bind the handler to the cycle scheduler once it is available."""
+        _LOGGER.debug("%s - on_scheduler_ready: start", self._thermostat.name)
         self._scheduler = scheduler
         scheduler.register_cycle_start_callback(self._on_cycle_start)
         scheduler.register_cycle_end_callback(self._on_cycle_end)
@@ -344,6 +408,11 @@ class PelletRegulationHandler:
 
     def should_publish_intermediate(self) -> bool:
         """Return True when VT may publish the current intermediate state."""
+        _LOGGER.debug(
+            "%s - should_publish_intermediate: returning %s",
+            self._thermostat.name,
+            self._should_publish_intermediate,
+        )
         return self._should_publish_intermediate
 
     # ------------------------------------------------------------------
@@ -355,16 +424,24 @@ class PelletRegulationHandler:
 
         Skipped when the level has not changed since the last call (anti-spam).
         """
+        _LOGGER.debug("%s - _apply_power_level: start", self._thermostat.name)
         if self._controller is None:
+            _LOGGER.debug("%s - _apply_power_level: skipped (no controller)", self._thermostat.name)
             return
 
         level_index = self._controller.current_level_index
         level_value = self._controller.current_level_value
 
         if level_value is None:
+            _LOGGER.debug("%s - _apply_power_level: skipped (no level value)", self._thermostat.name)
             return
 
         if level_index == self._last_applied_level_index:
+            _LOGGER.debug(
+                "%s - _apply_power_level: skipped (unchanged level index=%s)",
+                self._thermostat.name,
+                level_index,
+            )
             return  # Already at the correct level — no service call needed.
 
         attribute = self._opts.get(CONF_POWER_CONTROL_ATTRIBUTE, "fan_mode")
@@ -372,6 +449,14 @@ class PelletRegulationHandler:
         climate_entities = [
             eid for eid in underlying_list if eid.startswith("climate.")
         ]
+
+        _LOGGER.debug(
+            "%s - _apply_power_level: applying %s=%s to %s entities",
+            self._thermostat.name,
+            attribute,
+            level_value,
+            len(climate_entities),
+        )
 
         for entity_id in climate_entities:
             try:
@@ -399,9 +484,16 @@ class PelletRegulationHandler:
                 )
 
         self._last_applied_level_index = level_index
+        _LOGGER.debug(
+            "%s - _apply_power_level: completed (last_applied_level_index=%s)",
+            self._thermostat.name,
+            self._last_applied_level_index,
+        )
 
     async def _on_cycle_start(self, *_args: Any, **_kwargs: Any) -> None:
         """Callback at the start of each cycle (v0.1: no-op)."""
+        _LOGGER.debug("%s - _on_cycle_start: callback invoked", self._thermostat.name)
 
     async def _on_cycle_end(self, *_args: Any, **_kwargs: Any) -> None:
         """Callback at the end of each cycle (v0.1: no-op)."""
+        _LOGGER.debug("%s - _on_cycle_end: callback invoked", self._thermostat.name)

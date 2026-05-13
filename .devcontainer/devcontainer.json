@@ -11,6 +11,8 @@
         "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
         // the VTherm integration
         "source=/Users/jmcollin/SugarSync/Projets/home-assistant/versatile_thermostat/custom_components/versatile_thermostat,target=/workspaces/vtherm_pellet_stove/custom_components/versatile_thermostat,type=bind",
+        // the VTherm integration
+        "source=/Users/jmcollin/SugarSync/Projets/home-assistant/Duepi_EVO/custom_components/duepi_evo,target=/workspaces/vtherm_pellet_stove/custom_components/duepi_evo,type=bind",
         // the heating simulator from Caiussererus
         "source=/Users/jmcollin/SugarSync/Projets/home-assistant/heating-simulator,target=/workspaces/vtherm_pellet_stove/custom_components/heating_simulator,type=bind",
         // the versatile-thermostat-ui-card
@@ -22,7 +24,6 @@
             "extensions": [
                 "ms-python.python",
                 "ms-python.pylint",
-                "ms-python.isort",
                 "ms-python.black-formatter",
                 "redhat.vscode-yaml",
                 "github.vscode-pull-request-github",

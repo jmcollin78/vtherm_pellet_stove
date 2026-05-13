@@ -220,3 +220,4 @@ __marimo__/
 .homeassistant/
 custom_components/versatile_thermostat/
 custom_components/heating-simulator/
+custom_components/duepi_evo/
