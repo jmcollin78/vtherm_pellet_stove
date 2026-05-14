@@ -121,6 +121,33 @@
                 },
                 {
                   "type": "tile",
+                  "entity": "climate.duepi_evo",
+                  "state_content": [
+                    "state",
+                    "burner_status",
+                    "fan_mode",
+                    "last_changed"
+                  ],
+                  "vertical": false,
+                  "features_position": "bottom",
+                  "grid_options": {
+                    "columns": "full"
+                  },
+                  "features": [
+                    {
+                      "type": "climate-hvac-modes"
+                    },
+                    {
+                      "type": "climate-fan-modes",
+                      "style": "dropdown"
+                    },
+                    {
+                      "type": "target-temperature"
+                    }
+                  ]
+                },
+                {
+                  "type": "tile",
                   "entity": "binary_sensor.poele_actif",
                   "state_content": "last_changed",
                   "vertical": false,
