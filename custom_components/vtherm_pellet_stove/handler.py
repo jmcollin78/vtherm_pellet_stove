@@ -93,6 +93,7 @@ class PelletRegulationHandler:
         self._opts: dict[str, Any] = dict(DEFAULT_OPTIONS)
         self._last_applied_level_index: int | None = None
         self._debug_sensor: PelletDebugSensor | None = None
+        self._last_energy_at: datetime | None = None
         _LOGGER.debug("%s - __init__: handler created", self._thermostat.name)
 
     # ------------------------------------------------------------------
@@ -336,20 +337,62 @@ class PelletRegulationHandler:
                 self._thermostat.name,
                 self._controller.is_heating,
             )
+        # Pellet stoves are always 0 % or 100 % — no periodic cycling is
+        # needed.  A single command is sent only on state transitions or when
+        # forced, then the cycle is cancelled immediately to prevent the
+        # scheduler's _on_master_cycle_end auto-restart from resending
+        # turn_off (F0000) commands during hardware cooldown (which would
+        # reset the cooldown timer indefinitely).
+        should_send_command = transition_off or transition_on or force
         if self._scheduler is not None:
-            _LOGGER.debug(
-                "%s - control_heating: starting scheduler cycle (force=%s)",
-                self._thermostat.name,
-                force or transition_off or transition_on,
-            )
-            await self._scheduler.start_cycle(
-                hvac_mode, on_percent, force or transition_off or transition_on
-            )
+            if should_send_command:
+                _LOGGER.debug(
+                    "%s - control_heating: sending stove command "
+                    "(transition_off=%s transition_on=%s force=%s)",
+                    self._thermostat.name,
+                    transition_off,
+                    transition_on,
+                    force,
+                )
+                await self._scheduler.start_cycle(hvac_mode, on_percent, True)
+                await self._scheduler.cancel_cycle()
+            elif self._scheduler.is_cycle_running:
+                _LOGGER.debug(
+                    "%s - control_heating: cancelling leftover cycle (stable state)",
+                    self._thermostat.name,
+                )
+                await self._scheduler.cancel_cycle()
+            else:
+                _LOGGER.debug(
+                    "%s - control_heating: stable state, no command needed",
+                    self._thermostat.name,
+                )
         else:
             _LOGGER.debug(
                 "%s - control_heating: scheduler not yet available",
                 self._thermostat.name,
             )
+
+        # 3b. Energy accounting: credit one cycle-worth of energy every
+        # cycle_min minutes while the stove is heating, replacing the
+        # _on_master_cycle_end callback (which no longer fires because the
+        # cycle is cancelled immediately above).
+        if self._controller.is_heating:
+            cycle_duration_sec = (self._thermostat.cycle_min or 5) * 60
+            if self._last_energy_at is None:
+                self._last_energy_at = now
+            elif (now - self._last_energy_at).total_seconds() >= cycle_duration_sec:
+                _fn = getattr(self._thermostat, "incremente_energy", None)
+                if callable(_fn):
+                    _LOGGER.debug(
+                        "%s - control_heating: crediting energy (%.0fs elapsed)",
+                        self._thermostat.name,
+                        (now - self._last_energy_at).total_seconds(),
+                    )
+                    _fn()
+                self._last_energy_at = now
+        else:
+            self._last_energy_at = None
 
         # 4. Apply power level on the underlying climate entity (optional).
         if self._opts.get(CONF_POWER_CONTROL_ENABLED) and self._controller.is_heating:
@@ -378,6 +421,9 @@ class PelletRegulationHandler:
 
         # 7. Update the debug sensor.
         if self._debug_sensor is not None:
+            _LOGGER.debug(
+                "%s - control_heating: updating debug sensor", self._thermostat.name
+            )
             self._debug_sensor.update_from_controller(self._controller, now)
         else:
             _LOGGER.debug("%s - control_heating: debug sensor not available", self._thermostat.name)

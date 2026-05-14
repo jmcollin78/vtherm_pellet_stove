@@ -93,6 +93,7 @@ def _make_thermostat(
     thermostat.vtherm_hvac_mode = vtherm_hvac_mode
     thermostat.entry_infos = {"underlying_entity_ids": underlying_list or []}
     thermostat.prop_algorithm = None
+    thermostat.cycle_min = 5
     thermostat.update_custom_attributes = MagicMock()
     thermostat.async_write_ha_state = MagicMock()
     return thermostat
@@ -102,6 +103,8 @@ def _make_scheduler():
     """Construit un faux InterfaceCycleScheduler."""
     scheduler = MagicMock()
     scheduler.start_cycle = AsyncMock()
+    scheduler.cancel_cycle = AsyncMock()
+    scheduler.is_cycle_running = False
     scheduler.register_cycle_start_callback = MagicMock()
     scheduler.register_cycle_end_callback = MagicMock()
     return scheduler
@@ -283,6 +286,7 @@ class TestScenario7OptionsUpdate:
         await handler.control_heating(timestamp=_now())
 
         scheduler.start_cycle.assert_awaited_once()
+        scheduler.cancel_cycle.assert_awaited_once()
         call_args = scheduler.start_cycle.call_args[0]
         hvac_mode, on_percent, _force = call_args
         assert hvac_mode == "heat"
@@ -640,10 +644,10 @@ class TestScenario10RestoreAfterRestart:
 
         await handler.control_heating(timestamp=_now())
 
-        # Le scheduler doit recevoir on_percent=1 (locked_on)
-        scheduler.start_cycle.assert_awaited_once()
-        _, on_percent, _force = scheduler.start_cycle.call_args[0]
-        assert on_percent == pytest.approx(1.0)
+        # Stable state (locked_on): no transition → aucune commande envoyée au scheduler.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is True
         assert handler._controller.last_reason == "locked_on"
 
     async def test_turn_off_allowed_after_min_on_duration_elapsed(self):
@@ -676,6 +680,8 @@ class TestScenario10RestoreAfterRestart:
 
         await handler.control_heating(timestamp=_now())
 
+        scheduler.start_cycle.assert_awaited_once()
+        scheduler.cancel_cycle.assert_awaited_once()
         _, on_percent, _force = scheduler.start_cycle.call_args[0]
         assert on_percent == pytest.approx(0.0)
         assert handler._controller.last_reason == "above_off_threshold"
@@ -815,6 +821,7 @@ class TestScenario13ForceOnToOffTransition:
         assert handler._controller.last_reason == "above_off_threshold"
         # Force doit être True pour stopper le cycle immédiatement.
         assert force is True
+        scheduler.cancel_cycle.assert_awaited_once()
 
     async def test_locked_on_does_not_force(self):
         """Quand le garde-fous maintient ON (locked_on), force reste False."""
@@ -846,11 +853,11 @@ class TestScenario13ForceOnToOffTransition:
 
         await handler.control_heating(timestamp=_now())
 
-        _, on_percent, force = scheduler.start_cycle.call_args[0]
-        # locked_on : on reste en chauffe, is_heating inchangé → pas de force.
-        assert on_percent == pytest.approx(1.0)
+        # Stable state (locked_on): aucune transition → aucune commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is True
         assert handler._controller.last_reason == "locked_on"
-        assert force is False
 
     async def test_already_off_no_force(self):
         """Si le poêle était déjà éteint et reste éteint, force=False."""
@@ -880,10 +887,16 @@ class TestScenario13ForceOnToOffTransition:
 
         await handler.control_heating(timestamp=_now())
 
-        _, on_percent, force = scheduler.start_cycle.call_args[0]
-        assert on_percent == pytest.approx(0.0)
-        # Pas de transition → force=False
-        assert force is False
+        # Stable state (already off, no transition): aucune commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is False
+        # hold_in_band : la temp est déjà au-dessus du seuil, le contrôleur
+        # maintient simplement OFF sans relancer de transition.
+        assert handler._controller.last_reason in (
+            "above_off_threshold",
+            "hold_in_band",
+        )
 
     async def test_safety_transition_also_forces(self):
         """Transition ON→OFF par sécurité haute température → force=True aussi."""
@@ -920,6 +933,7 @@ class TestScenario13ForceOnToOffTransition:
         assert handler._controller.last_reason == "safety"
         # Même pour safety, la transition ON→OFF doit forcer l'arrêt immédiat.
         assert force is True
+        scheduler.cancel_cycle.assert_awaited_once()
 
     async def test_off_to_on_transition_forces_scheduler_start(self):
         """Transition OFF→ON (cooldown écoulé + below_on_threshold) → force=True."""
@@ -956,6 +970,7 @@ class TestScenario13ForceOnToOffTransition:
         assert handler._controller.last_reason == "below_on_threshold"
         # Force doit être True pour démarrer le cycle immédiatement.
         assert force is True
+        scheduler.cancel_cycle.assert_awaited_once()
 
     async def test_locked_off_does_not_force(self):
         """Quand le garde-fous maintient OFF (locked_off), force reste False."""
@@ -987,11 +1002,11 @@ class TestScenario13ForceOnToOffTransition:
 
         await handler.control_heating(timestamp=_now())
 
-        _, on_percent, force = scheduler.start_cycle.call_args[0]
-        # locked_off : is_heating inchangé (False) → pas de transition → pas de force.
-        assert on_percent == pytest.approx(0.0)
+        # Stable state (locked_off): aucune transition → aucune commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is False
         assert handler._controller.last_reason == "locked_off"
-        assert force is False
 
 
 class TestScenario14ChangedFalseStillRecomputes:
@@ -1027,6 +1042,7 @@ class TestScenario14ChangedFalseStillRecomputes:
         await handler.on_state_changed(False)
 
         scheduler.start_cycle.assert_awaited_once()
+        scheduler.cancel_cycle.assert_awaited_once()
         _, on_percent, force = scheduler.start_cycle.call_args[0]
         assert on_percent == pytest.approx(0.0)
         assert handler._controller.last_reason == "above_off_threshold"
@@ -1128,6 +1144,7 @@ class TestScenario14StaleHeatingOnRestart:
         # Le poêle doit s'allumer (ou demander ON) sans attendre 1h.
         assert on_percent == pytest.approx(1.0)
         assert handler._controller.last_reason != "locked_off"
+        scheduler.cancel_cycle.assert_awaited_once()
 
     async def test_stale_is_heating_with_existing_last_off_at_preserved(self):
         """Si le Store a déjà un last_off_at ancien, il doit être conservé tel quel.
@@ -1173,3 +1190,234 @@ class TestScenario14StaleHeatingOnRestart:
         _, on_percent, _force = scheduler.start_cycle.call_args[0]
         assert on_percent == pytest.approx(1.0)
         assert handler._controller.last_reason != "locked_off"
+        scheduler.cancel_cycle.assert_awaited_once()
+
+
+# ===========================================================================
+# Scénario 15 — Contrôle binaire sans cycling
+# ===========================================================================
+
+
+class TestScenario15BinaryControlNoCycling:
+    """Vérifie le comportement sans cycling pour le contrôle binaire (0%/100%).
+
+    Les poêles à granulés produisent uniquement 0% ou 100%. Le scheduler ne
+    doit envoyer une commande QUE lors des transitions ou en cas de force=True.
+    En état stable, aucune commande n'est envoyée (pas de start_cycle ni
+    cancel_cycle), ce qui évite de réinitialiser le timer hardware de cooldown.
+    """
+
+    async def test_stable_heating_no_command_sent(self):
+        """En chauffage stable (pas de transition, force=False) → aucune commande."""
+        # Poêle allumé il y a 5 min (en dessous du seuil d'extinction).
+        five_min_ago = _now() - timedelta(minutes=5)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": five_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,  # Reste en dessous du seuil ON → locked_on
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        # État stable : aucune commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is True
+
+    async def test_stable_off_no_command_sent(self):
+        """En arrêt stable (pas de transition, force=False) → aucune commande."""
+        # Poêle éteint il y a 60 min, température toujours au-dessus.
+        sixty_min_ago = _now() - timedelta(minutes=60)
+        stored_data = {
+            "is_heating": False,
+            "current_level_index": None,
+            "last_on_at": None,
+            "last_off_at": sixty_min_ago.isoformat(),
+            "last_reason": "above_off_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=17.0,
+            current_temperature=19.9,  # Reste au-dessus → stable OFF
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        # État stable : aucune commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+        assert handler._controller.is_heating is False
+
+    async def test_force_sends_command_and_cancels(self):
+        """force=True → start_cycle appelé puis cancel_cycle immédiatement."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,  # below threshold → heating
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now(), force=True)
+
+        scheduler.start_cycle.assert_awaited_once()
+        scheduler.cancel_cycle.assert_awaited_once()
+        _, _, force = scheduler.start_cycle.call_args[0]
+        assert force is True
+
+    async def test_leftover_cycle_gets_cancelled_without_new_command(self):
+        """État stable + cycle en cours → seulement cancel_cycle, pas start_cycle."""
+        # Poêle déjà en chauffage stable (pas de transition).
+        five_min_ago = _now() - timedelta(minutes=5)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": five_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        scheduler.is_cycle_running = True  # Simule un cycle résiduel
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        # Cycle résiduel annulé, mais aucune nouvelle commande envoyée.
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_awaited_once()
+
+    async def test_energy_credited_after_cycle_min(self):
+        """incremente_energy est appelé après cycle_min minutes de chauffage."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,  # below threshold → heating
+            vtherm_hvac_mode="heat",
+        )
+        thermostat.cycle_min = 5  # 5 min → 300 s
+        thermostat.incremente_energy = MagicMock()
+
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        t0 = _now()
+        # Premier appel : _last_energy_at initialisé, pas de crédit.
+        await handler.control_heating(timestamp=t0)
+        thermostat.incremente_energy.assert_not_called()
+
+        # Deuxième appel après 6 min (> 5 min) : énergie créditée.
+        t1 = t0 + timedelta(minutes=6)
+        await handler.control_heating(timestamp=t1)
+        thermostat.incremente_energy.assert_called_once()
+
+    async def test_energy_not_credited_before_cycle_min(self):
+        """incremente_energy N'est PAS appelé avant cycle_min minutes."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="heat",
+        )
+        thermostat.cycle_min = 5
+        thermostat.incremente_energy = MagicMock()
+
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        t0 = _now()
+        await handler.control_heating(timestamp=t0)
+
+        # Deuxième appel après seulement 2 min (< 5 min) : pas de crédit.
+        t1 = t0 + timedelta(minutes=2)
+        await handler.control_heating(timestamp=t1)
+        thermostat.incremente_energy.assert_not_called()
+
+    async def test_energy_tracker_reset_on_turn_off(self):
+        """_last_energy_at est remis à None lorsque le poêle s'éteint."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,  # below threshold → heating
+            vtherm_hvac_mode="heat",
+        )
+        thermostat.cycle_min = 5
+        thermostat.incremente_energy = MagicMock()
+
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        t0 = _now()
+        await handler.control_heating(timestamp=t0)
+        assert handler._last_energy_at is not None
+
+        # Bascule au-dessus du seuil → extinction.
+        thermostat.current_temperature = 25.0
+        t1 = t0 + timedelta(minutes=35)  # min_on_duration (30min) écoulée
+        await handler.control_heating(timestamp=t1)
+
+        # _last_energy_at doit être remis à None.
+        assert handler._last_energy_at is None
