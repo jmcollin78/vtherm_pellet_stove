@@ -38,6 +38,7 @@ logger:
     logs:
         custom_components.versatile_thermostat: debug
         custom_components.vtherm_pellet_stove: debug
+        custom_components.duepi_evo: debug
 
 # Activer le débogueur Python (décommenter wait: true pour breakpoints)
 debugpy:
