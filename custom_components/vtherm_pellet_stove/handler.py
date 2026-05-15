@@ -46,6 +46,41 @@ _LOGGER = get_vtherm_logger(__name__)
 _CONF_UNDERLYING_LIST = "underlying_entity_ids"
 
 
+class _PropAlgoProxy:
+    """Read-only proxy exposing the pellet controller's on_percent to VTherm.
+
+    VTherm's ``ThermostatProp.recalculate()`` calls ``_prop_algorithm.calculate()``
+    on every temperature-sensor update **before** ``async_control_heating()``
+    reaches our handler.  That spurious first call mutates the controller's
+    internal state (e.g. it can set ``is_heating=True`` when the cooldown
+    expires), so when our ``control_heating()`` runs immediately after and
+    captures ``was_heating``, it already sees the post-transition value and
+    detects **no transition** → F0001 is never sent and the stove stays off.
+
+    By placing this proxy as ``prop_algorithm`` instead of the controller
+    directly, ``recalculate()`` becomes a no-op for the pellet state machine.
+    The authoritative ``calculate()`` call is the one made explicitly in
+    ``PelletRegulationHandler.control_heating()``.
+    """
+
+    def __init__(self, controller: "PelletRegulationController") -> None:
+        self._controller = controller
+
+    # VTherm reads this to populate ``on_percent`` and ``power_percent``.
+    @property
+    def on_percent(self) -> float | None:  # type: ignore[override]
+        return self._controller.on_percent
+
+    # Used by feature_safety_manager and thermostat_valve.
+    @property
+    def calculated_on_percent(self) -> float:
+        return self._controller.calculated_on_percent
+
+    def calculate(self, *args: Any, **kwargs: Any) -> float:
+        """No-op: actual calculation is managed by PelletRegulationHandler.control_heating()."""
+        return self._controller.on_percent or 0.0
+
+
 def _resolve_options(hass: Any, vtherm_uid: str | None) -> dict[str, Any]:
     """Return the effective options for a given VTherm unique_id.
 
@@ -89,6 +124,7 @@ class PelletRegulationHandler:
         self._scheduler: "InterfaceCycleScheduler | None" = None
         self._should_publish_intermediate: bool = True
         self._controller: PelletRegulationController | None = None
+        self._prop_proxy: _PropAlgoProxy | None = None
         self._store: Store | None = None
         self._opts: dict[str, Any] = dict(DEFAULT_OPTIONS)
         self._last_applied_level_index: int | None = None
@@ -125,9 +161,12 @@ class PelletRegulationHandler:
             power_boost_duration_min=int(self._opts[CONF_POWER_BOOST_DURATION_MIN]),
         )
 
-        # Expose the controller as prop_algorithm so VTherm safety manager
-        # can read on_percent at any time.
-        self._thermostat.prop_algorithm = self._controller
+        # Expose a proxy as prop_algorithm so VTherm can read on_percent at
+        # any time while blocking the spurious controller.calculate() call that
+        # ThermostatProp.recalculate() would otherwise trigger before our own
+        # control_heating() runs (see _PropAlgoProxy docstring).
+        self._prop_proxy = _PropAlgoProxy(self._controller)
+        self._thermostat.prop_algorithm = self._prop_proxy
 
         # Initialise persistent store (one per thermostat unique_id).
         slug = slugify(vtherm_uid or DOMAIN)
@@ -166,21 +205,12 @@ class PelletRegulationHandler:
                 self._controller.last_reason,
             )
 
-            # Guard: if the store says is_heating=True but VTherm is already in
-            # hvac_mode=off, the state is stale (HA shut down between the user
-            # pressing OFF and the handler saving is_heating=False). Correct it
-            # now WITHOUT touching last_off_at so that the min_off+cooldown guard
-            # is not armed at the current time — the user should be able to
-            # switch back to "heat" immediately without waiting up to 60 min.
-            hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
-            if self._controller.is_heating and hvac_mode == HVAC_MODE_OFF:
-                _LOGGER.warning(
-                    "%s - async_added_to_hass: stale is_heating=True detected while "
-                    "hvac_mode=off — correcting to is_heating=False without "
-                    "resetting last_off_at",
-                    self._thermostat.name,
-                )
-                self._controller.state.is_heating = False
+            # NOTE: do NOT check vtherm_hvac_mode here.
+            # async_added_to_hass() is called BEFORE VTherm restores its own
+            # state (super().async_added_to_hass() runs after us in
+            # ThermostatProp.async_added_to_hass()), so vtherm_hvac_mode is
+            # always None at this point.  The stale-state guard is applied in
+            # async_startup() where VTherm is fully initialised.
         else:
             _LOGGER.debug("%s - async_added_to_hass: no persisted data", self._thermostat.name)
 
@@ -227,6 +257,30 @@ class PelletRegulationHandler:
     async def async_startup(self) -> None:
         """Run startup actions after thermostat initialisation."""
         _LOGGER.debug("%s - async_startup: start", self._thermostat.name)
+
+        # Guard: if the restored state says is_heating=True but VTherm is in
+        # hvac_mode=off, the state is stale (HA shut down between the user
+        # pressing OFF and the handler saving is_heating=False). Correct it
+        # WITHOUT touching last_off_at so that the min_off+cooldown guard is
+        # not armed from now — the user should be able to switch back to
+        # "heat" immediately without waiting up to 60 min.
+        #
+        # This check MUST live here (not in async_added_to_hass) because
+        # ThermostatProp calls our async_added_to_hass() BEFORE
+        # super().async_added_to_hass(), so vtherm_hvac_mode is still None
+        # when async_added_to_hass() runs.  async_startup() is called AFTER
+        # super().async_startup(), so VTherm is fully initialised here.
+        if self._controller is not None and self._controller.is_heating:
+            hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
+            if hvac_mode == HVAC_MODE_OFF:
+                _LOGGER.warning(
+                    "%s - async_startup: stale is_heating=True detected while "
+                    "hvac_mode=off — correcting to is_heating=False without "
+                    "resetting last_off_at",
+                    self._thermostat.name,
+                )
+                self._controller.state.is_heating = False
+
         await self.on_state_changed(True)
 
     def remove(self) -> None:
@@ -309,8 +363,9 @@ class PelletRegulationHandler:
             now=now,
         )
 
-        # 2. Keep prop_algorithm reference current (VTherm reads it elsewhere).
-        self._thermostat.prop_algorithm = self._controller
+        # 2. (prop_algorithm is already the _PropAlgoProxy set in init_algorithm;
+        #     do NOT replace it with self._controller here — that would re-enable
+        #     the spurious recalculate() → controller.calculate() double-call.)
 
         # 3. Forward result to the cycle scheduler.
         # Force immediate application on any real state transition so the stove
@@ -338,21 +393,35 @@ class PelletRegulationHandler:
                 self._controller.is_heating,
             )
         # Pellet stoves are always 0 % or 100 % — no periodic cycling is
-        # needed.  A single command is sent only on state transitions or when
-        # forced, then the cycle is cancelled immediately to prevent the
-        # scheduler's _on_master_cycle_end auto-restart from resending
-        # turn_off (F0000) commands during hardware cooldown (which would
-        # reset the cooldown timer indefinitely).
-        should_send_command = transition_off or transition_on or force
+        # needed.  A single command is sent only on actual state transitions,
+        # then the cycle is cancelled immediately to prevent the scheduler's
+        # _on_master_cycle_end auto-restart from resending turn_off (F0000)
+        # commands during hardware cooldown (which would reset the cooldown
+        # timer indefinitely).
+        #
+        # NOTE: force=True is intentionally NOT included here.  For a binary
+        # stove, "force" means "recompute now" — which is already done above
+        # by calling controller.calculate().  If the result is still "stay
+        # off" (e.g. locked_off guard), sending start_cycle(on_percent=0)
+        # would issue a spurious F0000 that prevents ignition.
+        #
+        # IMPORTANT: when hvac_mode=off, VTherm already sends set_hvac_mode=off
+        # directly to the underlying entity (climate.duepi_evo), which triggers
+        # a first F0000 via the duepi_evo integration.  Calling start_cycle at
+        # the same time would trigger a second F0000 through the cycle scheduler
+        # on the same TCP connection, causing a "No ACK" race condition error.
+        # We therefore skip start_cycle when hvac_mode=off; any leftover cycle
+        # is still cancelled via the elif branch below.
+        is_hvac_off = str(hvac_mode).lower() == HVAC_MODE_OFF
+        should_send_command = (transition_off or transition_on) and not is_hvac_off
         if self._scheduler is not None:
             if should_send_command:
                 _LOGGER.debug(
                     "%s - control_heating: sending stove command "
-                    "(transition_off=%s transition_on=%s force=%s)",
+                    "(transition_off=%s transition_on=%s)",
                     self._thermostat.name,
                     transition_off,
                     transition_on,
-                    force,
                 )
                 await self._scheduler.start_cycle(hvac_mode, on_percent, True)
                 await self._scheduler.cancel_cycle()

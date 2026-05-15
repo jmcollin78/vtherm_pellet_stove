@@ -37,9 +37,9 @@ from custom_components.vtherm_pellet_stove.const import (
 )
 from custom_components.vtherm_pellet_stove.handler import (
     PelletRegulationHandler,
+    _PropAlgoProxy,
     _resolve_options,
 )
-
 
 # ---------------------------------------------------------------------------
 # Infrastructure mock partagée
@@ -242,13 +242,19 @@ class TestScenario7OptionsUpdate:
         assert handler2._controller._hysteresis.hysteresis_on == pytest.approx(1.0)
 
     def test_init_sets_prop_algorithm_on_thermostat(self):
-        """init_algorithm expose le contrôleur via thermostat.prop_algorithm."""
+        """init_algorithm expose un proxy via thermostat.prop_algorithm.
+
+        Depuis Fix 4, prop_algorithm est un _PropAlgoProxy (pas le contrôleur
+        directement) pour bloquer le double-appel de recalculate().
+        """
         hass = _make_hass()
         thermostat = _make_thermostat(hass)
         handler = PelletRegulationHandler(thermostat)
         handler.init_algorithm()
 
-        assert thermostat.prop_algorithm is handler._controller
+        assert isinstance(thermostat.prop_algorithm, _PropAlgoProxy)
+        # Le proxy expose bien le on_percent du contrôleur
+        assert thermostat.prop_algorithm.on_percent == handler._controller.on_percent
 
     def test_guard_rail_values_from_options(self):
         """Les durées minimales sont lues depuis les options."""
@@ -1098,8 +1104,9 @@ class TestScenario14StaleHeatingOnRestart:
         scheduler = _make_scheduler()
         handler.on_scheduler_ready(scheduler)
 
-        # Simule le premier cycle de régulation au démarrage (hvac_mode=off).
-        await handler.control_heating(timestamp=_now())
+        # Simule le démarrage HA : async_startup() applique le guard AVANT
+        # d'appeler control_heating() (via on_state_changed).
+        await handler.async_startup()
 
         # last_off_at ne doit PAS avoir été armé : le Store avait last_off_at=None
         # et aucune extinction réelle n'a eu lieu pendant cet arrêt.
@@ -1133,8 +1140,9 @@ class TestScenario14StaleHeatingOnRestart:
         scheduler = _make_scheduler()
         handler.on_scheduler_ready(scheduler)
 
-        # Premier cycle avec hvac_mode=off (simule le startup normal).
-        await handler.control_heating(timestamp=_now())
+        # Simule le démarrage HA : async_startup() applique le guard, puis
+        # appelle control_heating() via on_state_changed (hvac_mode=off → no cmd).
+        await handler.async_startup()
 
         # L'utilisateur bascule immédiatement en heat.
         thermostat.vtherm_hvac_mode = "heat"
@@ -1178,7 +1186,8 @@ class TestScenario14StaleHeatingOnRestart:
         scheduler = _make_scheduler()
         handler.on_scheduler_ready(scheduler)
 
-        await handler.control_heating(timestamp=_now())
+        # Simule le démarrage HA : async_startup() applique le guard.
+        await handler.async_startup()
 
         # last_off_at doit rester la valeur d'origine (24h ago), PAS now.
         assert handler._controller.state.last_off_at == old_off_at
@@ -1421,3 +1430,227 @@ class TestScenario15BinaryControlNoCycling:
 
         # _last_energy_at doit être remis à None.
         assert handler._last_energy_at is None
+
+    async def test_hvac_off_does_not_send_start_cycle(self):
+        """hvac_mode=off → VTherm gère déjà turn_off ; on ne doit PAS appeler
+        start_cycle (ce qui enverrait un second F0000 en concurrence avec le
+        set_hvac_mode=off de VTherm, causant une erreur 'No ACK').
+        """
+        # Poêle en chauffe depuis 35 min → prêt à s'éteindre.
+        thirty_five_min_ago = _now() - timedelta(minutes=35)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": None,
+            "last_on_at": thirty_five_min_ago.isoformat(),
+            "last_off_at": None,
+            "last_reason": "below_on_threshold",
+            "boost_until": None,
+        }
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="off",  # ← L'utilisateur a pressé OFF
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=stored_data)
+        await handler.async_added_to_hass()
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        # Aucun appel à start_cycle : VTherm a déjà envoyé set_hvac_mode=off
+        # via son propre mécanisme (qui génère F0000).
+        scheduler.start_cycle.assert_not_awaited()
+        # Le cycle est quand même annulé si un résidu existait.
+        assert handler._controller.is_heating is False
+
+    async def test_hvac_off_with_running_cycle_cancels_it(self):
+        """hvac_mode=off + cycle résiduel → cancel_cycle() appelé, pas start_cycle."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="off",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        scheduler.is_cycle_running = True  # Simule un cycle résiduel
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.control_heating(timestamp=_now())
+
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_awaited_once()
+
+
+# ===========================================================================
+# Scénario 16 — Proxy prop_algorithm : protection contre le double calculate()
+# ===========================================================================
+
+
+class TestScenario16PropAlgoProxy:
+    """Vérifie que _PropAlgoProxy bloque l'appel spurieux de recalculate().
+
+    Bug Fix 4 : ThermostatProp.recalculate() appelle _prop_algorithm.calculate()
+    AVANT que async_control_heating() atteigne notre handler.  Cet appel
+    anticipé effectuait la transition OFF→ON sur le contrôleur.  Quand
+    control_heating() s'exécutait ensuite, was_heating était déjà True →
+    aucune transition détectée → F0001 jamais envoyé → poêle bloqué.
+    """
+
+    def test_prop_algorithm_is_proxy_after_init(self):
+        """init_algorithm() expose un _PropAlgoProxy, pas le contrôleur directement."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(hass)
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+
+        algo = thermostat.prop_algorithm
+        assert isinstance(algo, _PropAlgoProxy), (
+            "thermostat.prop_algorithm devrait être un _PropAlgoProxy, "
+            f"got {type(algo)}"
+        )
+        assert (
+            algo is not handler._controller
+        ), "thermostat.prop_algorithm ne doit PAS être le contrôleur directement"
+
+    def test_proxy_on_percent_delegates_to_controller(self):
+        """_PropAlgoProxy.on_percent lit le contrôleur sous-jacent."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(hass)
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+
+        proxy = thermostat.prop_algorithm
+        assert isinstance(proxy, _PropAlgoProxy)
+        # Le contrôleur est initialisé avec is_heating=False → on_percent=0
+        assert proxy.on_percent == handler._controller.on_percent
+
+    def test_proxy_calculate_is_noop(self):
+        """_PropAlgoProxy.calculate() ne modifie pas l'état du contrôleur."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(hass)
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+
+        proxy = thermostat.prop_algorithm
+        assert isinstance(proxy, _PropAlgoProxy)
+
+        before_heating = handler._controller.is_heating
+
+        # Simule ce que ThermostatProp.recalculate() ferait avec des args positionnels
+        proxy.calculate(20.0, 19.0, 15.0, -0.1, "heat", power_shedding=False)
+
+        # L'état du contrôleur ne doit PAS avoir changé
+        assert (
+            handler._controller.is_heating == before_heating
+        ), "Le proxy.calculate() a modifié l'état du contrôleur — le no-op est cassé"
+
+    @pytest.mark.asyncio
+    async def test_transition_detected_despite_prior_recalculate_call(self):
+        """Fix 4 : la transition OFF→ON est détectée même si recalculate() avait
+        déjà appelé controller.calculate() juste avant control_heating().
+
+        Simule : cooldown expiré, recalculate() appelle proxy.calculate() (no-op),
+        puis control_heating() appelle controller.calculate() et doit voir
+        was_heating=False → transition_on=True → F0001 envoyé.
+        """
+        now = _now()
+        # Les options par défaut sont min_off=20 min + cooldown=5 min = 25 min.
+        # On place last_off_at 26 minutes dans le passé pour que can_turn_on() soit True.
+        total_delay_min = (
+            DEFAULT_OPTIONS[CONF_MIN_OFF_DURATION_MIN]
+            + DEFAULT_OPTIONS[CONF_COOLDOWN_DURATION_MIN]
+        )
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,  # Chambre froide → veut chauffer
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        # Placer le contrôleur en état « cooldown venant d'expirer »
+        t_off = now - timedelta(minutes=total_delay_min + 1)
+        handler._controller._state.last_off_at = t_off
+        handler._controller._state.is_heating = False
+
+        # Vérifier que le contrôleur confirme la fin du cooldown
+        # (pré-condition du test)
+        assert handler._controller._state.is_heating is False
+
+        # ── Étape 1 : simuler l'appel spurieux de recalculate() ──────────────
+        # ThermostatProp.recalculate() appelle proxy.calculate() avec les args
+        # positionnels habituels (ext_temp, slope, hvac_mode emballés dans *args).
+        proxy = thermostat.prop_algorithm
+        assert isinstance(proxy, _PropAlgoProxy), "Le proxy doit être en place"
+        proxy.calculate(
+            thermostat.target_temperature,
+            thermostat.current_temperature,
+            15.0,  # ext_temp (→ *args, ignoré)
+            -0.1,  # slope   (→ *args, ignoré)
+            "heat",  # hvac_mode (→ *args, ignoré — kwarg non passé)
+            power_shedding=False,
+        )
+
+        # Après le no-op du proxy, l'état du contrôleur est inchangé
+        assert (
+            handler._controller._state.is_heating is False
+        ), "Le proxy.calculate() a provoqué une transition — le no-op est cassé"
+
+        # ── Étape 2 : control_heating() s'exécute (vrai appel autorisé) ──────
+        await handler.control_heating(timestamp=now)
+
+        # La transition OFF→ON DOIT être détectée et F0001 envoyé
+        assert (
+            handler._controller.is_heating is True
+        ), "Le contrôleur devrait être en is_heating=True après expiration du cooldown"
+        scheduler.start_cycle.assert_awaited_once()
+        scheduler.cancel_cycle.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_control_heating_does_not_replace_proxy_with_controller(self):
+        """control_heating() ne doit pas écraser le proxy par le contrôleur."""
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            target_temperature=20.0,
+            current_temperature=19.0,
+            vtherm_hvac_mode="heat",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler)
+
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        proxy_before = thermostat.prop_algorithm
+        assert isinstance(proxy_before, _PropAlgoProxy)
+
+        await handler.control_heating(timestamp=_now())
+
+        proxy_after = thermostat.prop_algorithm
+        assert (
+            proxy_after is proxy_before
+        ), "control_heating() a remplacé le proxy par autre chose — bug !"
+        assert isinstance(
+            proxy_after, _PropAlgoProxy
+        ), "control_heating() a remplacé le proxy par le contrôleur directement"
