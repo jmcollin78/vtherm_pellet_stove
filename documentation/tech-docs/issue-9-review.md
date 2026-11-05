@@ -1,5 +1,15 @@
 # Revue de l'issue #9 : VTherm `over_switch` pilotant un poele par contact sec
 
+## Point de reprise du 2026-11-05 : convergence documentaire
+
+- L'utilisateur confirme que la reconciliation fait confiance a l'etat exploitable constate du sous-jacent. Les compteurs concordants sont repris ; sinon l'etat observe est adopte et les compteurs correspondants initialises a zero, sans temps inconnu ni commande de seule reconciliation. Aucun blocage supplementaire n'est ajoute sur la base de scenarios hypothetiques.
+- Les [specifications FR](../fr/issue-9-specifications.md), [EN](../en/issue-9-specifications.md) et la [conception](issue-9-design.md) portent les decisions Q-001 a Q-009. `Cleaning` et `Eco idle` sont non chauffants ; apres OFF, chacune acquitte l'arret et la premiere observation etablissant le cycle OFF initialise les compteurs. Un etat stable ou une progression normale ne les reinitialise pas.
+- Les deux agents specialises confirment le meme perimetre, la couverture documentaire individuelle FR-001..014, BR-001..006 et AC-001..031, et l'absence de contradiction normative bloquante detectee. Aucun nouvel arbitrage fonctionnel n'est identifie ; les anciennes questions speculatives sont abandonnees.
+- Les gardes et la priorite OFF/securite restent applicables. L'etat d'un contact sec n'est pas une mesure de la flamme ni de la fin physique du refroidissement ; l'ordre materiel des services n'est pas garanti par la seule observation.
+- La conception identifie les verifications techniques et les tests a effectuer sur les versions cibles, notamment les commandes VTherm, la persistance et les phases Duepi. La faisabilite complete n'est pas encore demontree ; aucun test HA ou materiel n'a ete execute. Developpement non autorise.
+
+Les sections suivantes conservent l'historique de la revue. Les propositions et questions anciennes qu'elles contiennent sont remplacees par les specifications consolidees et la conception actuelles ; elles ne constituent pas de nouveaux arbitrages a demander.
+
 ## Decision partielle Q-005 du 2026-11-05 : option locale explicite
 
 Sous-jacent unique valide : exactement un pour tout VTherm utilise par Pellet Stove, y compris climate, pas seulement contact sec. Zero ou plusieurs sont hors contrat ; pas de choix arbitraire/silencieux d'une entite. Contact sec : over_switch avec un switch ON/OFF, utilisateur confirmant le caractere bistable sans detection materielle pretendue. AC-030 et guides FR/EN alignes. Q-005 fonctionnellement close ; cette decision remplace les mentions historiques de validation du sous-jacent ou de Q-005 encore ouverte. Points de validation et traitement d'une configuration devenue non conforme restent a concevoir, ainsi que les autres mecanismes techniques ouverts ; aucun developpement autorise.
