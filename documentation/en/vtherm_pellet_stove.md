@@ -8,6 +8,7 @@
 
 - [vtherm\_pellet\_stove — User Guide](#vtherm_pellet_stove--user-guide)
   - [Table of contents](#table-of-contents)
+  - [Underlying state following and reconciliation: planned behavior](#underlying-state-following-and-reconciliation-planned-behavior)
   - [1. Prerequisites](#1-prerequisites)
   - [2. Installation](#2-installation)
     - [Via HACS (recommended)](#via-hacs-recommended)
@@ -41,6 +42,31 @@
     - [HA restarted and the stove state is inconsistent](#ha-restarted-and-the-stove-state-is-inconsistent)
 
 ---
+
+## Underlying state following and reconciliation: planned behavior
+
+> Rules approved for issue #9, still in specification/design and **not implemented at this stage**. This section does not describe a guarantee of the current release. See the [specifications](issue-9-specifications.md).
+
+In planned dry-contact mode, the relay exposes ON/OFF only: it confirms neither flame, actual heating nor physical cooling completion.
+
+State following, persistence/recovery and reconciliation also apply to a `climate` underlying such as Duepi-EVO. Retain its available burner/phase information and protections: requested HVAC mode is not proof of heating, and HVAC OFF does not prove cooling completion. Binary rules below describe dry contact; a `climate` is not reduced to an ON/OFF relay.
+
+- At Home Assistant shutdown, save cycle state and ON, OFF and presumed-cooling counters. Resume them at startup without crediting downtime.
+- If the relay is unavailable at startup or runtime, Pellet Stove itself remains `unavailable`. Pause counters and regulation decisions without issuing a default shutdown, and wait for recovery **indefinitely**.
+- On usable ON/OFF recovery, automatically reconcile before resuming regulation. If observed and retained state agree, resume counters without resetting them.
+- If states differ, adopt relay state and start its corresponding minimum durations at this observation. Retained OFF to observed ON: full minimum ON (`min_on_duration_min`). Retained ON to observed OFF: presumed-cooling and minimum-OFF counters start at zero; another ON requires `min_off_duration_min + cooldown_duration_min` and current heat demand.
+- Without a usable snapshot, including first installation or data loss after abrupt shutdown, adopt the first usable ON/OFF and zero its corresponding counters: full minimum ON when ON, full minimum OFF plus cooldown when OFF. Wait indefinitely if the relay is unavailable. If a usable matching snapshot survives an abrupt shutdown, resume its values without adding unsaved time.
+- Startup and reconciliation themselves issue no ON/OFF command. Explicit OFF and safety retain priority where commanding is possible, without hardware delivery guarantees.
+
+Example: 30-minute minimum ON, 20 elapsed minutes saved, relay still ON at recovery: 10 minutes remain. If saved state was OFF but the relay returns ON, the 30-minute minimum starts at the recovery observation without assuming when the relay actually changed.
+
+External actions during normal operation are also followed: adopt observed state, start counters corresponding to the change, then continue according to demand, minimum durations and safety without user acknowledgement. For dry contact, external ON starts minimum ON; external OFF starts minimum OFF and cooldown. For `climate`, preserve burner phases and guards without restarting the whole cycle at every phase progression. Unchanged-state publications do not reset counters. Adoption alone does not command a reversal of the external action.
+
+After a stop request, an intermediate **“stop pending”** state distinguishes the requested command from last observed state. For Duepi-EVO, burner **`Cooldown`** acknowledges the request: leave pending and track cooling. Later `Off` is not required for acknowledgement; `Cooldown` does not mean cooling is complete.
+
+Previous state still displayed because of polling does not alone mean failure or a new external action. It causes no immediate alert, repeated order on every evaluation or automatic opposite command. Pending does not make Pellet Stove `unavailable` while its underlying remains available. The functional label `Cooldown` must be mapped to values actually exposed by the target Duepi-EVO version; inspected local code exposes `Cooling down`.
+
+Anomaly timeout, errors, other acknowledgement sequences, contradictory in-flight commands and detailed `climate` phase mapping still require decisions/design before implementation.
 
 ## 1. Prerequisites
 

@@ -8,6 +8,7 @@
 
 - [vtherm\_pellet\_stove — Guide utilisateur](#vtherm_pellet_stove--guide-utilisateur)
   - [Table des matières](#table-des-matières)
+  - [Suivi du sous-jacent et réconciliation : comportement prévu](#suivi-du-sous-jacent-et-réconciliation--comportement-prévu)
   - [1. Prérequis](#1-prérequis)
   - [2. Installation](#2-installation)
     - [Via HACS (recommandé)](#via-hacs-recommandé)
@@ -41,6 +42,31 @@
     - [HA a redémarré et l'état du poêle est incohérent](#ha-a-redémarré-et-létat-du-poêle-est-incohérent)
 
 ---
+
+## Suivi du sous-jacent et réconciliation : comportement prévu
+
+> Règles validées pour l'issue #9, encore en phase de spécification/conception et **non implémentées à ce stade**. Cette section ne décrit pas une garantie de la version actuelle. Voir les [spécifications](issue-9-specifications.md).
+
+En mode contact sec prévu, le relais indique seulement ON/OFF : il ne confirme ni flamme, ni chauffe réelle, ni fin physique de refroidissement.
+
+Le principe de suivi, de sauvegarde/reprise et de réconciliation s'applique aussi au sous-jacent `climate` (Duepi-EVO, par exemple). Dans ce cas, conserver les informations de brûleur et de phases disponibles, ainsi que leurs protections : un mode HVAC demandé n'est pas une preuve de chauffe, et HVAC OFF ne prouve pas la fin du refroidissement. Les règles binaires ci-dessous décrivent le contact sec ; un `climate` n'est pas réduit à un relais ON/OFF.
+
+- À l'arrêt de Home Assistant, sauvegarder l'état du cycle et les compteurs de marche, d'arrêt et de refroidissement présumé. Les reprendre au démarrage sans comptabiliser l'interruption.
+- Si le relais est indisponible, au démarrage ou en fonctionnement, Pellet Stove reste lui aussi `unavailable`. Suspendre compteurs et décisions de régulation, sans commander d'extinction par défaut, et attendre le retour du relais **sans limite de durée**.
+- Au retour d'un ON/OFF exploitable, réconcilier automatiquement avant de reprendre la régulation. Si l'état correspond à celui conservé, reprendre les compteurs sans les remettre à zéro.
+- Si l'état diffère, adopter celui du relais et démarrer les durées minimales correspondantes à cette observation. OFF conservé vers ON observé : minimum de marche complet (`min_on_duration_min`). ON conservé vers OFF observé : refroidissement présumé et minimum d'arrêt repartent de zéro ; un nouveau ON attend `min_off_duration_min + cooldown_duration_min` et une demande de chauffe courante.
+- Sans sauvegarde exploitable, notamment à la première installation ou après perte de données lors d'un arrêt brutal, adopter le premier ON/OFF exploitable et démarrer les compteurs correspondants à zéro : minimum de marche complet si ON, minimum d'arrêt plus cooldown complet si OFF. Attendre le relais sans limite s'il est indisponible. Si une sauvegarde exploitable et concordante subsiste après un arrêt brutal, reprendre ses valeurs sans ajouter le temps non sauvegardé.
+- Le démarrage et la réconciliation ne commandent pas eux-mêmes ON/OFF. OFF explicite et sécurité gardent leur priorité lorsque la commande est possible, sans garantie de réception matérielle.
+
+Exemple : minimum de marche de 30 minutes, compteur sauvegardé à 20 minutes, relais toujours ON au retour : il reste 10 minutes. Si l'état sauvegardé était OFF mais que le relais revient ON, le minimum de 30 minutes commence à l'observation du retour, sans supposer quand le relais a réellement changé.
+
+En fonctionnement normal, une manœuvre externe du sous-jacent est également suivie : adopter l'état observé, démarrer les compteurs correspondant au changement et poursuivre la régulation selon la demande, les minima et les sécurités, sans acquittement utilisateur. Pour le contact sec : ON externe démarre le minimum de marche ; OFF externe démarre minimum d'arrêt et cooldown. Pour un `climate`, conserver les phases de brûleur et leurs gardes, sans relancer tout le cycle à chaque progression de phase. Une publication d'état inchangé ne remet pas les compteurs à zéro. L'adoption ne commande pas à elle seule une inversion de l'action externe.
+
+Après une demande d'arrêt, un état intermédiaire **« en attente d'arrêt »** distingue la commande demandée du dernier état observé. Pour Duepi-EVO, le passage du brûleur à **`Cooldown`** acquitte cette demande : quitter alors l'attente et suivre le refroidissement. Le passage ultérieur à `Off` n'est pas requis pour cet acquittement ; `Cooldown` ne signifie pas que le refroidissement est terminé.
+
+L'ancien état encore affiché à cause du polling ne constitue pas à lui seul un échec ni une nouvelle manœuvre externe. Il n'entraîne pas d'alerte immédiate, de répétition à chaque évaluation ou de commande inverse automatique. Cette attente ne rend pas Pellet Stove `unavailable` tant que le sous-jacent reste disponible. Le libellé fonctionnel `Cooldown` devra être mappé aux valeurs réellement exposées par la version Duepi-EVO utilisée ; le code local consulté expose `Cooling down`.
+
+Le délai avant anomalie, les erreurs, les autres séquences d'acquittement, les commandes contradictoires en cours et le mapping détaillé des phases `climate` restent à finaliser avant développement.
 
 ## 1. Prérequis
 

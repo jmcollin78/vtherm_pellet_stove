@@ -1,5 +1,41 @@
 # Revue de l'issue #9 : VTherm `over_switch` pilotant un poele par contact sec
 
+## Decision partielle Q-004 du 2026-11-05 : attente d'arret et Cooldown
+
+L'utilisateur valide un etat intermediaire « en attente d'arret » et precise le libelle exact `Cooldown` : le passage du bruleur Duepi-EVO a cet etat acquitte la demande d'arret. Off arrive plus tard et n'est pas le critere d'acquittement ; Cooldown ne prouve pas une fin de refroidissement. Separer demande, dernier etat observe et acquittement ; un retour de service n'est pas une confirmation de phase. Le retard seul ne justifie ni alerte immediate, manoeuvre externe supposee, repetition a chaque evaluation ni commande inverse. Garder Pellet Stove disponible si le sous-jacent l'est ; vraie indisponibilite => Q-002.
+
+Fait local distinct : le code Duepi-EVO consulte expose `Cooling down`, pas le libelle `Cooldown` precise par l'utilisateur. Verifier le mapping/version en conception sans modifier ce code ni substituer ce libelle dans la decision. AC-019 et les guides FR/EN documentent le comportement prevu non implemente.
+
+Q-004 reste ouvert pour delai avant anomalie, erreurs/escalade, autres observations/sous-jacents (dont Off directement sans Cooldown observe), attente ON et ordonnancement des commandes en vol. Aucun timeout ni repetition automatique valide ; developpement non autorise.
+
+## Decision prioritaire Q-003 du 2026-11-05 : suivre switch et climate
+
+Q-003 valide : apres manoeuvre externe en fonctionnement normal, suivre l'etat exploitable du sous-jacent, adapter l'etat interne et commencer les compteurs correspondant au changement observe, puis poursuivre la regulation avec ses minima et securites. Aucun blocage permanent ni acquittement pour la seule manoeuvre, aucune commande due a la seule adoption. Une observation stable ne reinitialise pas les compteurs. Le principe commun et les regles Q-002 de sauvegarde/reprise/indisponibilite/reconciliation valent aussi bien pour switch contact sec que pour climate tel Duepi-EVO.
+
+Le retour de bruleur et les phases climate gardent leur sens et leurs protections : ne pas les reduire au ON/OFF presume du contact sec, ne pas assimiler mode HVAC demande et chauffe observee, ni HVAC OFF et refroidissement acheve. Le mapping detaille vers les compteurs reste un travail de conception. AC-017/018 ajoutent les verifications switch/climate, observations stables, gardes et reprise. Les guides FR/EN portent ces regles comme cible non implementee.
+
+Ce resultat clot Q-003 fonctionnellement et prevaut sur les propositions historiques de blocage apres manoeuvre externe ou d'invariance stricte climate ci-dessous, uniquement pour le suivi/reconciliation. IDs, configuration et commandes specifiques restent a preserver. Q-004/Q-005, faisabilite et autorisation de developpement restent ouverts.
+
+## Decision prioritaire du 2026-11-05 : continuite au redemarrage
+
+L'utilisateur demande de sauvegarder a l'arret HA l'etat du cycle et les differents compteurs, puis de reprendre leurs valeurs au redemarrage. Cela concerne minimum ON, minimum OFF et cooldown, pas seulement les durees configurees. Avec une sauvegarde exploitable et coherente avec le relais, le redemarrage ne remet pas les compteurs a zero et n'impose pas une nouvelle duree complete. Exemple : minimum ON de 30 minutes, 20 minutes deja effectuees => 10 minutes restantes.
+
+Cette decision remplace les passages ci-dessous qui proposent de recompter le minimum ON depuis le demarrage HA, ainsi que l'exigence systematique d'une nouvelle periode OFF apres restart dans les anciens documents lies. La continuite est logique, non une preuve d'etat physique pendant l'arret HA. Ni l'arret HA ni la restauration ne doivent a eux seuls commander OFF ou ON ; les decisions justifiees apres restauration et les priorites OFF explicite/securite restent applicables.
+
+**Signalement non reproduit :** l'integration tend a eteindre le poele lors d'un redemarrage. La cause reste a rechercher dans le cycle de vie du plugin et les commandes VTherm ; aucun correctif ni essai n'est realise ici. AC-012 ajoute aux specifications exige de verifier la continuite et l'absence de commande due au seul redemarrage.
+
+Precision confirmee par l'utilisateur : les compteurs ON, OFF et cooldown sont suspendus pendant l'arret HA et reprennent exactement leurs valeurs sauvegardees, sans compter le temps d'interruption. Un minimum ON de 30 minutes dont 20 effectuees garde donc 10 minutes restantes apres la reprise.
+
+Precision utilisateur remplaçant l'attente maximale de 5 minutes : attendre sans limite le retour du relais, au demarrage comme lors d'une indisponibilite en fonctionnement. Pendant cette attente, Pellet Stove est lui aussi `unavailable`, les decisions de regulation et les compteurs sont suspendus. Conserver la surveillance pour reconcilier automatiquement au retour d'un ON/OFF exploitable, meme tardif, avant toute decision. Reprendre les compteurs si l'etat sauvegarde/conserve correspond au relais, sans compter le temps indisponible ; sinon signaler la divergence sans appliquer aveuglement les anciens compteurs. Ne pas eteindre par defaut ni deduire OFF de l'indisponibilite. OFF explicite/securite reste prioritaire si la commande est possible. Aucun timeout ou seuil d'alerte de 5 minutes n'est retenu. L'absence de reconciliation reste une hypothese pour l'extinction signalee, non une cause demontree. AC-013 couvre disponibilite, attente prolongee et reprise automatique.
+
+Reconciliation ON conserve vers OFF observe, validee par l'utilisateur : adopter OFF et commencer les compteurs minimum OFF et cooldown a zero a l'observation OFF exploitable, sans antidatage ni reprise d'un ancien compteur OFF. Aucune commande due a la seule reconciliation. Le prochain ON reste soumis a la demande courante, au minimum OFF plus cooldown et aux autres gardes, notamment Q-004. AC-014 couvre ce cas au redemarrage et apres indisponibilite.
+
+Regle generale validee : s'adapter a l'etat exploitable du relais lors de la reconciliation. Etats concordants => reprendre les compteurs conserves ; etats differents => adopter le relais et commencer les durees minimales de ce nouvel etat. OFF conserve vers ON observe => compteur ON a zero a cette observation et minimum ON complet avant OFF ordinaire, sans commande de reconciliation ni date physique inventee ; OFF explicite/securite garde sa priorite. Le cas ON vers OFF demeure celui decrit ci-dessus. AC-015 complete AC-014. Ces regles sont ajoutees aux guides FR/EN comme comportement prevu non encore implemente.
+
+Absence de sauvegarde exploitable validee : premiere installation, perte ou invalidation apres arret brutal => adopter le premier ON/OFF exploitable et demarrer les compteurs correspondants a zero, avec durees minimales completes, sans commande d'adoption ni anciennete inventee. OFF explicite/securite reste prioritaire ; Q-004 reste applicable. Si une sauvegarde exploitable et concordante subsiste apres arret brutal, reprendre ses compteurs sans reconstruire le temps non sauvegarde. AC-016 couvre ces cas.
+
+Q-002 est clos sur le plan des arbitrages fonctionnels le 2026-11-05 ; ce resultat prevaut sur les mentions historiques contraires ci-dessous. L'attente sans limite avec Pellet Stove `unavailable`, le gel des compteurs et la reconciliation au retour sont retenus au demarrage et en fonctionnement. Q-003..005 et la faisabilite des commandes restent ouverts. Specifications FR/EN, conception et guides comportent les regles ; developpement toujours non autorise.
+
 ## Reference et constat
 
 - Issue : [jmcollin78/vtherm_pellet_stove#9](https://github.com/jmcollin78/vtherm_pellet_stove/issues/9), ouverte, etiquette `enhancement` lors de la consultation du 2026-11-03 ; branche de travail liee dans l'interface GitHub, sans PR ni autre relation affichee. L'absence de doublon n'a pas ete verifiee exhaustivement.
