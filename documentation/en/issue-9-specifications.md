@@ -1,5 +1,7 @@
 # Issue #9 - Consolidated functional specifications
 
+> Follow-up on 2026-11-05: the user subsequently authorized implementation. Development and local test results are recorded in the [report](../tech-docs/issue-9-review.md). Statements below withholding authorization describe the v1.8 documentary milestone before that approval; requirements remain unchanged. Integration and hardware qualification are not declared complete.
+
 | Metadata       | Value                                                                                                                                                                                                                      |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Version        | 1.8, usable observed state takes precedence for adoption/reconciliation                                                                                                                                                    |

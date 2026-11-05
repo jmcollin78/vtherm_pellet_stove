@@ -20,7 +20,9 @@
 
 ## Qu'est-ce que vtherm_pellet_stove ?
 
-`vtherm_pellet_stove` enregistre un nouvel algorithme proportionnel nommé **`pellet_regulation`** dans l'API publique de [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm). Il étend les thermostats VTherm configurés en mode `over_switch` ciblant une entité `climate` (ex. Duepi EVO, poêle ESPHome, MCZ, EdilKamin, …).
+`vtherm_pellet_stove` enregistre un nouvel algorithme proportionnel nommé **`pellet_regulation`** dans l'API publique de [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm). Il étend les thermostats VTherm configurés en mode `over_switch` ciblant exactement une entité `climate` avec phase de brûleur exploitable, ou un `switch` bistable en contact sec local explicitement configuré.
+
+> Issue #9 : le contact sec et le suivi commun des compteurs sont implémentés sur cette branche de développement, pas encore publiés ni qualifiés sur poêle réel. ON ne prouve pas l'allumage ; après OFF, le refroidissement est seulement présumé. Un cooldown trop court peut autoriser un rallumage pendant le refroidissement. Voir le [guide](documentation/fr/vtherm_pellet_stove.md) et les [résultats/limites de validation](documentation/tech-docs/issue-9-review.md).
 
 Fonctionnalités principales :
 
@@ -37,9 +39,10 @@ Fonctionnalités principales :
 Le plugin utilise l'API publique [vtherm_api](https://github.com/KipK/vtherm_api). Une fois installé :
 
 1. Configurer Versatile Thermostat en mode **`over_switch`**.
-2. Définir l'entité sous-jacente comme l'entité `climate.*` du poêle.
-3. Configurer `vswitch_on = "set_hvac_mode/hvac_mode:heat"` et `vswitch_off = "set_hvac_mode/hvac_mode:off"`.
+2. Choisir un seul sous-jacent : le `climate.*` du poêle ou un relais `switch.*` bistable.
+3. Pour `climate`, configurer `vswitch_on = "set_hvac_mode/hvac_mode:heat"` et `vswitch_off = "set_hvac_mode/hvac_mode:off"`. Pour le relais standard, conserver `turn_on`/`turn_off`.
 4. Sélectionner **`pellet_regulation`** comme fonction proportionnelle.
+5. Pour le contact sec, ajouter une entrée Pellet Stove propre au VTherm, sélectionner ce mode, lire l'avertissement et confirmer la bistabilité avant de valider les durées. Puissance et boost sont inopérants dans ce mode.
 
 ## Installation
 

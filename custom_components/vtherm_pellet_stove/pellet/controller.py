@@ -349,11 +349,75 @@ class PelletRegulationController:
     # Calcul interne
     # ------------------------------------------------------------------
 
+    def calculate_observed(
+        self, *, target: float | None, current: float | None,
+        hvac_mode: str, allow_turn_on: bool, now: datetime,
+        slope: float | None = None,
+    ) -> str | None:
+        """Decide a command without modifying the observed cycle or its timers."""
+        state = self._state
+        priority = str(hvac_mode).lower() == HVAC_MODE_OFF or (
+            current is not None and current >= self._safety_room_temp
+        )
+        if priority:
+            state.off_priority = True
+            state.last_reason = "hvac_off" if str(hvac_mode).lower() == HVAC_MODE_OFF else "safety"
+            self._last_decision = PelletDecision(
+                self._min_on_percent,
+                "hvac_off" if str(hvac_mode).lower() == HVAC_MODE_OFF else "safety",
+            )
+            if state.pending != "OFF" and (
+                state.is_heating or state.pending == "ON" or not state.available
+            ):
+                return "OFF"
+            return None
+        if not state.available or state.pending is not None or target is None:
+            return None
+        state.off_priority = False
+        decision = self._hysteresis.decide(
+            is_heating=state.is_heating, current=current, target=target
+        )
+        command = None
+        reason = decision.reason
+        if decision.decision == "ON" and not state.is_heating:
+            if allow_turn_on and self._guard.can_turn_on(now, state):
+                command = "ON"
+            else:
+                reason = "locked_off"
+        elif decision.decision == "OFF" and state.is_heating:
+            if self._guard.can_turn_off(now, state):
+                command = "OFF"
+            else:
+                reason = "locked_on"
+        if self._boost_manager is not None:
+            self._boost_manager.maybe_trigger(
+                previous_target=self._previous_target, new_target=target,
+                now=now, state=state,
+            )
+        self._previous_target = target
+        requested_on = command == "ON" or (command is None and state.is_heating)
+        level_index = self._compute_level_index(
+            target=target, current=current, slope=slope, now=now
+        ) if requested_on else None
+        self._last_decision = PelletDecision(
+            self._max_on_percent if requested_on else self._min_on_percent,
+            reason, level_index,
+        )
+        state.current_level_index = level_index
+        state.last_reason = reason
+        return command
+
     def current_phase(self, now: datetime | None = None) -> str:
         """Phase courante du poêle : ``off``, ``igniting``, ``burning`` ou ``cooldown``."""
         if now is None:
             now = datetime.now(timezone.utc)
         state = self._state
+        if state.observed_cycle is not None:
+            if not state.available:
+                return "unavailable"
+            if state.is_heating:
+                return "igniting" if state.observed_phase == "Ignition starting" else "burning"
+            return "cooldown" if self._guard.seconds_until_can_turn_on(now, state) else "off"
         if state.is_heating:
             if state.last_on_at is not None:
                 elapsed_min = _elapsed_min(state.last_on_at, now)
@@ -403,7 +467,24 @@ class PelletRegulationController:
             and now < state.boost_until
         )
 
+        if state.observed_cycle is not None:
+            elapsed_on_min = round(state.elapsed_on_sec / 60, 1) if state.is_heating else None
+            elapsed_off_min = round(state.elapsed_off_sec / 60, 1) if not state.is_heating else None
+            next_action_at = None
+
         return {
+            "available": state.available,
+            "observed_cycle": state.observed_cycle,
+            "observed_phase": state.observed_phase,
+            "elapsed_on_sec": state.elapsed_on_sec,
+            "elapsed_off_sec": state.elapsed_off_sec,
+            "elapsed_cooldown_sec": state.elapsed_cooldown_sec,
+            "remaining_on_sec": self._guard.seconds_until_can_turn_off(now, state),
+            "remaining_off_sec": self._guard.seconds_until_can_turn_on(now, state),
+            "pending_command": state.pending,
+            "off_priority": state.off_priority,
+            "resume_reason": state.resume_reason,
+            "command_error": state.command_error,
             "phase": self.current_phase(now),
             "is_heating": state.is_heating,
             "on_percent": self.on_percent,

@@ -45,15 +45,24 @@
 
 ## Suivi du sous-jacent et réconciliation : comportement prévu
 
-> Règles validées pour l'issue #9, encore en phase de spécification/conception et **non implémentées à ce stade**. Cette section ne décrit pas une garantie de la version actuelle. Voir les [spécifications](issue-9-specifications.md).
+> Issue #9 : implémentation en développement sur cette branche, vérifiée par des tests simulés. Pas encore publiée ni validée sur un poêle réel ou sur toutes les versions annoncées. Les tests locaux utilisent HA 2026.3.1, Python 3.14.10 et vtherm-api 0.8.0. Voir les [spécifications](issue-9-specifications.md) et le [rapport de développement](../tech-docs/issue-9-review.md).
 
-En mode contact sec prévu, le relais indique seulement ON/OFF : il ne confirme ni flamme, ni chauffe réelle, ni fin physique de refroidissement.
+En mode contact sec, le relais indique seulement ON/OFF : il ne confirme ni flamme, ni chauffe réelle, ni fin physique de refroidissement.
 
-Tout VTherm utilisé par Pellet Stove devra avoir **exactement un sous-jacent**, en mode contact sec comme en mode `climate`. Zéro ou plusieurs sous-jacents ne respectent pas ce contrat ; aucune entité ne sera choisie arbitrairement. Le contact sec exige un VTherm `over_switch` avec un seul `switch` ON/OFF : l'utilisateur confirme que le contact est bistable, car Home Assistant ne permet pas de vérifier ce comportement matériel.
+Tout VTherm utilisé par Pellet Stove doit avoir **exactement un sous-jacent**, en mode contact sec comme en mode `climate`. Zéro ou plusieurs sous-jacents sont refusés ; aucune entité n'est choisie arbitrairement. Le contact sec exige un VTherm `over_switch` avec un seul `switch` ON/OFF : l'utilisateur confirme que le contact est bistable, car Home Assistant ne permet pas de vérifier ce comportement matériel.
 
-Le mode contact sec sera une **option explicite dans la configuration Pellet Stove de chaque VTherm**, avec un avertissement sur ces limites avant validation. Les minima et le cooldown sont des protections temporelles, pas une confirmation physique. Le choix ne s'applique qu'au VTherm concerné : aucun réglage commun, rechargement ou migration ne doit activer ce mode automatiquement sur les autres entrées. Sans choix validé, conserver le mode existant.
+Le mode contact sec est une **option explicite dans la configuration Pellet Stove de chaque VTherm**, avec un avertissement sur ces limites avant validation. Les minima et le cooldown sont des protections temporelles, pas une confirmation physique. Le choix ne s'applique qu'au VTherm concerné : aucun réglage commun, rechargement ou migration n'active ce mode automatiquement sur les autres entrées. Sans choix validé, le mode existant est conservé.
 
-En contact sec, les **réglages de puissance et de boost seront masqués et inopérants**, même si des valeurs anciennes ou communes sont enregistrées. Les anciennes valeurs seront conservées, y compris lors de l'enregistrement du formulaire, pour un retour explicite au mode `climate` selon ses règles. Les entrées restées en mode `climate` ne sont pas modifiées par cette neutralisation.
+En contact sec, les **réglages de puissance et de boost sont masqués et inopérants**, même si des valeurs anciennes ou communes sont enregistrées. Les anciennes valeurs sont conservées, y compris lors de l'enregistrement du formulaire, pour un retour explicite au mode `climate` selon ses règles. Les entrées restées en mode `climate` ne sont pas modifiées par cette neutralisation.
+
+Pour configurer un contact sec :
+
+1. Créer un VTherm `over_switch`, avec le seul `switch` du relais et l'algorithme `pellet_regulation`. Aucun thermostat générique intermédiaire n'est nécessaire.
+2. Ajouter une entrée Pellet Stove propre à ce VTherm, puis cocher **Contact sec**. Dans Options ou Reconfigurer, sélectionner ce mode avant les réglages.
+3. Lire l'avertissement, confirmer le contact bistable et régler `min_on_duration_min`, `min_off_duration_min` et `cooldown_duration_min` selon le fabricant du poêle.
+4. Valider. Annuler avant validation ne change pas l'entrée existante. Les commandes standard du relais sont `turn_on`/`turn_off` ; les personnalisations doivent avoir un contrat commande/état ON/OFF cohérent.
+
+**Attention : ON ne prouve pas l'allumage. Après OFF, le refroidissement est seulement présumé. Un cooldown trop court peut autoriser un rallumage pendant le refroidissement.**
 
 Le principe de suivi, de sauvegarde/reprise et de réconciliation s'applique aussi au sous-jacent `climate` (Duepi-EVO, par exemple). Dans ce cas, conserver les informations de brûleur et de phases disponibles, ainsi que leurs protections : un mode HVAC demandé n'est pas une preuve de chauffe, et HVAC OFF ne prouve pas la fin du refroidissement. Les règles binaires ci-dessous décrivent le contact sec ; un `climate` n'est pas réduit à un relais ON/OFF.
 
@@ -70,7 +79,7 @@ En fonctionnement normal, une manœuvre externe du sous-jacent est également su
 
 Après une demande d'arrêt, un état intermédiaire **« en attente d'arrêt »** distingue la commande demandée du dernier état observé. Pour Duepi-EVO, le passage du brûleur à **`Cooldown`** acquitte cette demande : quitter alors l'attente et suivre le refroidissement. Le passage ultérieur à `Off` n'est pas requis pour cet acquittement ; `Cooldown` ne signifie pas que le refroidissement est terminé.
 
-L'ancien état encore affiché à cause du polling ne constitue pas à lui seul un échec ni une nouvelle manœuvre externe. Il n'entraîne pas d'alerte immédiate, de répétition à chaque évaluation ou de commande inverse automatique. Cette attente ne rend pas Pellet Stove `unavailable` tant que le sous-jacent reste disponible. Le libellé fonctionnel `Cooldown` devra être mappé aux valeurs réellement exposées par la version Duepi-EVO utilisée ; le code local consulté expose `Cooling down`.
+L'ancien état encore affiché à cause du polling ne constitue pas à lui seul un échec ni une nouvelle manœuvre externe. Il n'entraîne pas d'alerte immédiate, de répétition à chaque évaluation ou de commande inverse automatique. Cette attente ne rend pas Pellet Stove `unavailable` tant que le sous-jacent reste disponible. Le mapping accepte `Cooling down` (Duepi local 2026.03.0) et `Cooldown`. `Ignition starting` et `Flame On` acquittent ON. `Cleaning` et `Eco idle` sont non chauffants ; après OFF, ils terminent immédiatement l'attente, même après une erreur. La première observation établissant le cycle OFF initialise les compteurs ; une progression vers `Cooling down` ou `Off` ne les remet pas à zéro.
 
 L'attente de confirmation d'arrêt n'a **aucune limite de durée** : si la confirmation n'arrive jamais, rester en attente, sans alerte liée au seul temps écoulé ni répétition automatique de la commande. Continuer à surveiller et réconcilier automatiquement dès qu'une observation pertinente arrive, même très tard. Ne pas présenter l'arrêt comme obtenu ni le refroidissement comme commencé sur la seule base de la commande ou du temps passé. Les priorités OFF explicite/sécurité restent applicables ; une véritable indisponibilité suit les règles décrites plus haut. Cette attente ne garantit pas l'arrêt matériel.
 
@@ -88,7 +97,9 @@ Un **OFF explicite ou de sécurité est immédiatement prioritaire**, même si u
 
 Une **demande ON pendant un arrêt en cours est ignorée silencieusement** : ni commande ON, ni alerte de refus, ni mémorisation pour plus tard. Il n'y a pas de rejeu après confirmation de l'arrêt ou expiration des gardes. Plus généralement, un ON qui ne respecte pas les règles n'est pas conservé en attente. Seule une nouvelle évaluation de la demande courante, conforme aux gardes et à la sécurité, peut décider un nouveau ON. Ignorer la demande ne change pas l'état observé : dans le cas décrit, le thermostat est encore ON tant que l'arrêt n'est pas confirmé. Le silence de ce refus normal ne masque pas les erreurs de commande explicites.
 
-Le mécanisme d'ordonnancement des commandes en vol, la présentation HA des erreurs et le mapping détaillé des phases `climate` restent à finaliser avant développement.
+Le capteur de diagnostic conserve son identifiant et expose `raw_state`, `observed_phase`, `observed_cycle`, `available`, `elapsed_on_sec`, `elapsed_off_sec`, `elapsed_cooldown_sec`, `remaining_on_sec`, `remaining_off_sec`, `pending_command`, `off_priority`, `resume_reason`, `command_error`, `target_error` et `storage_error`. Les trois compteurs utilisent le temps actif monotone, suspendu hors HA et pendant l'indisponibilité ; minimum OFF et cooldown partagent leur origine, sans double comptage. Les anciennes dates seules ne sont pas converties en temps actif. Une expiration donne une permission, jamais un ordre automatique indépendant de la demande courante.
+
+Limites à qualifier sur les versions déployées : VTherm peut aussi commander lors de son initialisation, du keep-alive ou de ses réparations. Certaines erreurs de service sont absorbées par son wrapper et ne peuvent pas être exposées comme erreurs remontées au plugin. Les tests du handler ne garantissent pas l'absence de commandes par ces voies externes, leur ordre matériel ou la livraison au poêle. La source locale `burner_status` est annoncée obsolète par Duepi ; une autre source de phase doit être validée avant d'être annoncée compatible.
 
 ## 1. Prérequis
 
@@ -98,7 +109,7 @@ Le mécanisme d'ordonnancement des commandes en vol, la présentation HA des err
 | [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0             |
 | HACS                                                                       | 1.34             |
 
-Votre poêle à pellets **doit être déjà exposé comme entité `climate`** dans Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, ou toute autre intégration). Ce plugin ne communique **pas** directement avec les poêles.
+Votre poêle doit être exposé dans Home Assistant par une entité `climate` avec une phase de brûleur reconnue, ou par un unique relais `switch` bistable en contact sec explicitement configuré. Le seul HVAC demandé n'est pas une phase exploitable. Ce plugin ne communique **pas** directement avec les poêles.
 
 ---
 
@@ -148,7 +159,7 @@ Se référer à la [documentation de Versatile Thermostat](https://github.com/jm
 
 1. Aller dans **Paramètres → Appareils et services → Versatile Thermostat → Ajouter**.
 2. Choisir le type de thermostat **`over_switch`**.
-3. Dans le champ **Entité sous-jacente**, sélectionner l'entité `climate` qui contrôle le poêle à pellets (ex. `climate.duepi_evo`).
+3. Dans le champ **Entité sous-jacente**, sélectionner une seule entité : le `climate` qui contrôle le poêle (ex. `climate.duepi_evo`) ou le `switch` bistable du contact sec.
 4. Dans le champ **Fonction proportionnelle** (algorithme), sélectionner **`pellet_regulation`**.
 5. Définir la durée du cycle (`cycle_min`) à `60` minutes.
 6. Définir le **Délai d'activation minimal** à `1800` s (30 min) et le **Délai de désactivation minimal** à `1500` s (25 min) — ces valeurs doivent correspondre à `min_on_duration_min` et `min_off_duration_min + cooldown_duration_min`.
@@ -157,6 +168,8 @@ Se référer à la [documentation de Versatile Thermostat](https://github.com/jm
 ### Étape 4 — Ajouter les commandes personnalisées d'allumage et d'extinction
 
 Le mode `over_switch` de VTherm communique avec le poêle via deux appels de service configurables. Ces commandes doivent être renseignées dans la **page de configuration du sous-jacent** du VTherm créé à l'étape précédente :
+
+Cette étape concerne le sous-jacent `climate`. Pour un `switch` bistable standard, conserver `turn_on`/`turn_off` et activer explicitement le contact sec à l'étape suivante.
 
 1. Ouvrir l'entité VTherm → **Options** → page **Entités sous-jacentes**.
 2. Dans le champ **Commande d'allumage** (`vswitch_on`), saisir :
@@ -169,7 +182,7 @@ Le mode `over_switch` de VTherm communique avec le poêle via deux appels de ser
    ```
 4. Sauvegarder. VTherm appellera désormais `climate.set_hvac_mode(hvac_mode=heat)` pour allumer le poêle et `climate.set_hvac_mode(hvac_mode=off)` pour l'éteindre.
 
-> **Pourquoi ces commandes ?** Les poêles à pellets sont exposés comme entités `climate`, pas `switch`. La syntaxe `vswitch_on/off` permet à VTherm d'appeler n'importe quel service HA au format `nom_service/clé:valeur`.
+> **Pourquoi ces commandes ?** Une entité `climate` utilise `set_hvac_mode`, contrairement au relais contact sec. La syntaxe `vswitch_on/off` permet à VTherm d'appeler un service HA au format `nom_service/clé:valeur`.
 
 ### Étape 5 — Relier vtherm_pellet_stove au VTherm
 
@@ -177,7 +190,7 @@ Choisir l'une des deux options selon que des paramètres spécifiques à ce poê
 
 **Option A — Utiliser les defaults globaux (aucune action requise)**
 
-Si les paramètres par défaut globaux conviennent à ce poêle, aucune étape supplémentaire n'est nécessaire. Le VTherm utilise automatiquement les defaults globaux car il est configuré avec l'algorithme `pellet_regulation`.
+Si les paramètres par défaut globaux conviennent à ce poêle en mode `climate`, aucune étape supplémentaire n'est nécessaire. Le contact sec exige toujours une entrée locale explicite.
 
 **Option B — Créer une entrée par thermostat (recommandé pour un réglage fin)**
 
@@ -217,7 +230,7 @@ Créer un VTherm en mode **`over_switch`** avec les paramètres suivants :
 | Option VTherm                      | Valeur                                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
 | **Type de thermostat**             | `over_switch`                                                                                     |
-| **Entité sous-jacente**            | `climate.<votre_poele>` (ex. `climate.duepi_evo`)                                                 |
+| **Entité sous-jacente**            | Un seul `climate.<votre_poele>` ou `switch.<relais_bistable>` avec contact sec local explicite       |
 | **Fonction proportionnelle**       | `pellet_regulation`                                                                               |
 | **Commande `vswitch_on`**          | `set_hvac_mode/hvac_mode:heat`                                                                    |
 | **Commande `vswitch_off`**         | `set_hvac_mode/hvac_mode:off`                                                                     |

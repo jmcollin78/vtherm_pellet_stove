@@ -1,5 +1,7 @@
 # Issue #9 - Spécifications fonctionnelles consolidées
 
+> Suivi du 2026-11-05 : l'utilisateur a depuis autorisé le développement. L'implémentation et ses tests locaux sont consignés dans le [rapport](../tech-docs/issue-9-review.md). Les mentions de non-autorisation ci-dessous décrivent le jalon documentaire v1.8 antérieur à cet accord ; les exigences restent inchangées. La qualification d'intégration et matérielle n'est pas déclarée achevée.
+
 | Métadonnée               | Valeur                                                                                                                                                                                                                                      |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Version                  | 1.8, priorité de l'état exploitable constaté pour l'adoption/réconciliation                                                                                                                                                                 |

@@ -22,7 +22,9 @@
 
 ## What is vtherm_pellet_stove?
 
-`vtherm_pellet_stove` registers a new proportional algorithm named **`pellet_regulation`** in the [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm) API. It extends VTherm `over_switch` thermostats that target a `climate` entity (e.g. a Duepi EVO, an ESPHome stove, MCZ, EdilKamin, …).
+`vtherm_pellet_stove` registers a new proportional algorithm named **`pellet_regulation`** in the [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm) API. It extends VTherm `over_switch` thermostats targeting exactly one `climate` entity with a usable burner phase, or one bistable `switch` in explicitly configured local dry-contact mode.
+
+> Issue #9: dry contact and shared active counters are implemented on this development branch, not yet released or qualified on real stove hardware. ON does not prove ignition; after OFF, cooling is only presumed. A cooldown that is too short may allow restarting while the stove is still cooling. See the [guide](documentation/en/vtherm_pellet_stove.md) and [validation results/limits](documentation/tech-docs/issue-9-review.md).
 
 Key features:
 
@@ -39,9 +41,10 @@ Key features:
 The plugin relies on the public [vtherm_api](https://github.com/KipK/vtherm_api). Once installed:
 
 1. Configure Versatile Thermostat in **`over_switch`** mode.
-2. Set the underlying entity to your stove's `climate.*` entity.
-3. Configure `vswitch_on = "set_hvac_mode/hvac_mode:heat"` and `vswitch_off = "set_hvac_mode/hvac_mode:off"`.
+2. Select exactly one underlying: the stove `climate.*` or a bistable relay `switch.*`.
+3. For `climate`, configure `vswitch_on = "set_hvac_mode/hvac_mode:heat"` and `vswitch_off = "set_hvac_mode/hvac_mode:off"`. For a standard relay, keep `turn_on`/`turn_off`.
 4. Select **`pellet_regulation`** as the proportional function.
+5. For dry contact, add a local Pellet Stove entry for the VTherm, select this mode, read the warning and confirm bistability before saving durations. Power and boost are inactive in this mode.
 
 ## Installation
 

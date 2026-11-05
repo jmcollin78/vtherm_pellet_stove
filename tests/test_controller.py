@@ -79,6 +79,14 @@ def test_reset_clears_history_and_preserves_safety(heating: bool) -> None:
     assert ctrl.on_percent == pytest.approx(0.1)
     assert ctrl.get_debug_attributes(now)["next_action_allowed_at"] is None
     assert ctrl.save_state() == {
+        "cycle_version": 1,
+        "observed_cycle": None,
+        "observed_phase": None,
+        "elapsed_on_sec": 0.0,
+        "elapsed_off_sec": 0.0,
+        "pending": None,
+        "off_priority": False,
+        "command_error": None,
         "is_heating": False,
         "current_level_index": None,
         "last_on_at": None,

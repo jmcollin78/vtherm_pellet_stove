@@ -1,5 +1,49 @@
 # Revue de l'issue #9 : VTherm `over_switch` pilotant un poele par contact sec
 
+## Developpement autorise et implemente sur la branche de travail - 2026-11-05
+
+L'utilisateur a explicitement autorise le developpement apres reconciliation des specifications FR/EN v1.8 et de la conception v0.8. Cette autorisation remplace les mentions historiques « developpement non autorise » ci-dessous ; les exigences et decisions Q-001 a Q-009 ne changent pas.
+
+### Resultat livre dans l'espace de travail
+
+- Mode contact sec strictement local, non herite des defaults globaux : creation, Options et Reconfigurer, avertissement FR/EN avant sauvegarde, confirmation bistable et refus d'une cible hors contrat. Un seul sous-jacent dans les deux modes.
+- Validation/observation partagees dans `target.py`. Le contrat commande/etat ON/OFF des switches personnalises est verifie au runtime ; aucune inversion materielle n'est supposee. Les phases reconnues ne sont pas remplacees par le seul HVAC demande.
+- Cycle observe distinct des decisions : cumuls actifs monotones, suspension durant indisponibilite/interruption, reprise concordante ou adoption/zero, sans commande de seule reconciliation. Les dates legacy seules ne donnent aucun credit actif.
+- Snapshot versionne sous la cle Store existante, rattache a la cible et au mode ; sauvegarde periodique et a l'arret propre, transfert memoire au reload et lectures/ecritures serialisees par UID. Les erreurs de lecture/ecriture restent diagnostiquees.
+- Commandes en attente sans timeout ni retry periodique, acquittement observe et erreur explicite conservee. `Cleaning` et `Eco idle` acquittent OFF sans attendre une autre phase ; progression normale sans reset des cumuls.
+- OFF explicite/securite prioritaire. Pour un OFF que le scheduler filtrerait pendant ON en attente ou sans observation disponible, la methode `turn_off()` du sous-jacent VTherm est utilisee, sans remplacer ses protections. La voie HVAC OFF directe existante n'est pas doublee dans le cas ordinaire. Un HVAC absent n'est pas interprete comme OFF explicite.
+- Puissance/boost masques et neutralises en contact sec, valeurs conservees pour retour explicite a `climate`. Identifiants existants du diagnostic preserves et attributs observation/attente/cumuls/reprise/erreurs ajoutes.
+
+### Verification executee
+
+Environnement observe : Python **3.14.10**, Home Assistant installe **2026.3.1**, `vtherm-api` **0.8.0**. Sources locales VTherm **10.6.3** et Duepi **2026.03.0** ; elles ne constituent pas une identification des versions deployees. HA installe est anterieur au minimum **2026.4** annonce dans les guides : la compatibilite avec ce minimum reste a qualifier.
+
+**192 tests reussis**, dont les tests existants de services, hysteresis et puissance. Commande CI executee avec deux workers :
+
+```bash
+PYTEST_XDIST_AUTO_NUM_WORKERS=2 .venv/bin/python -m pytest -qq --timeout=9 --durations=10 -n auto -o console_output_style=count -p no:sugar tests
+```
+
+Apres nettoyage des nouveaux avertissements, nouvelle execution sequentielle : **192 passed**. Compilation Python du plugin et des tests reussie ; JSON FR/EN verifies avec detection des cles dupliquees ; `git diff --check` sans erreur. Aucun diagnostic dans les fichiers de production modifies ni dans les tests de configuration/handler verifies. Les avertissements historiques des autres tests ne sont pas nettoyes dans cette issue.
+
+| Groupe | Assertions automatisees et sources | Portee |
+| --- | --- | --- |
+| Configuration, AC-001/002/010/011/028/029/030 | `tests/test_config_flow.py`, `tests/test_handler.py` : trois parcours, avertissement avant sauvegarde, confirmation obligatoire, rejet des cibles, isolation locale et valeurs masquees conservees | Formulaires et entites simules ; pas d'essai UI sur instance deployee |
+| Temps/reprise, AC-004 a AC-007, AC-012 a AC-018 | `tests/test_cycle_guard.py`, `tests/test_handler.py` : horloge controlee, 20/30 minutes ON, OFF partiel, indisponibilite longue, sauvegarde invalide, concordance/divergence et reload | Pas de credit d'interruption ; pas de preuve physique |
+| Commandes, AC-003/008/009, AC-019 a AC-027 | `tests/test_handler.py` : attente sans repetition, erreur distincte, acquittements tardifs, priorite OFF et absence de rejeu ON | Un test utilise le scheduler VTherm local reel et des services HA enregistres, avec sous-jacent simule et detection de valve isolee ; wrappers materiels non qualifies |
+| Phases, AC-018/031 | `tests/test_handler.py`, `tests/test_cycle_guard.py` : `Cleaning`/`Eco idle` testes separement, apres erreur, progression vers `Cooling down`/`Off`, sauvegarde et reprise concordante | Mapping de la source locale `burner_status` ; pas de certification d'une autre source/version |
+
+Ces groupes tracent des assertions executees, **pas une declaration d'acceptation integrale des 31 AC**. Les dependances externes et comportements materiels restent distincts des tests simules.
+
+### Limites concretes et qualification restante
+
+1. La methode locale `UnderlyingSwitch.check_initial_state()` peut emettre OFF quand VTherm est OFF et le sous-jacent actif. Son keep-alive peut aussi repeter la commande retenue ; les chemins repair/OFF direct restent exterieurs au handler. L'absence de commande de cycle de vie ou de repetition n'est donc pas certifiee pour l'ensemble VTherm par les seuls tests du plugin. Les fichiers VTherm ne sont pas modifies et aucune protection n'est desactivee pour masquer cette limite.
+2. `UnderlyingSwitch.turn_on/off()` utilise des appels de service non bloquants et absorbe `ServiceNotFound`. Le plugin ne peut pas inventer une erreur qui ne lui remonte pas ; un retour sans exception n'est ni acquittement ni preuve de livraison. Les tests de services couvrent les erreurs effectivement remontees par leur adaptateur simule, pas toutes les erreurs absorbees des wrappers.
+3. La source locale Duepi `burner_status` est annoncee obsolete. Pas de capteur de remplacement invente, pas de changement Duepi/firmware, et pas de validation sur poele reel.
+4. Les essais sur versions HA/VTherm/Duepi deployees, les voies initialisation/keep-alive/repair et l'ordre materiel restent a effectuer avant de declarer l'issue entierement acceptee ou de publier une garantie de fonctionnement. Ce constat ne change ni les regles d'adoption ni les arbitrages fonctionnels ; aucun nouveau blocage ou delai n'est ajoute.
+
+**Decision actuelle : implementation et tests locaux disponibles pour revue ; qualification d'integration/deploiement encore ouverte.** Aucun commit, branche ou publication effectue. Le dossier non suivi du simulateur preexistant est laisse intact.
+
 ## Point de reprise du 2026-11-05 : convergence documentaire
 
 - L'utilisateur confirme que la reconciliation fait confiance a l'etat exploitable constate du sous-jacent. Les compteurs concordants sont repris ; sinon l'etat observe est adopte et les compteurs correspondants initialises a zero, sans temps inconnu ni commande de seule reconciliation. Aucun blocage supplementaire n'est ajoute sur la base de scenarios hypothetiques.

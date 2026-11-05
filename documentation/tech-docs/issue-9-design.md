@@ -1,5 +1,7 @@
 # Issue #9 - Conception technique / Technical Design
 
+> Suivi / Follow-up 2026-11-05 : developpement depuis autorise par l'utilisateur / implementation subsequently authorized by the user. Voir le [rapport de developpement et de verification / development and verification report](issue-9-review.md). Les mentions de non-autorisation ci-dessous decrivent le jalon v0.8 anterieur a cet accord / statements withholding authorization below describe the v0.8 milestone before that approval. Exigences inchangees ; qualification runtime complete non revendiquee / requirements unchanged; full runtime qualification not claimed.
+
 | Champ / Field                          | Valeur / Value                                                                                                                                                                                       |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Version                                | 0.8 - Alignement sur les specifications v1.8 / Alignment with v1.8 specifications                                                                                                                    |
