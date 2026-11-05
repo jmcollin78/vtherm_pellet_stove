@@ -49,6 +49,12 @@
 
 In planned dry-contact mode, the relay exposes ON/OFF only: it confirms neither flame, actual heating nor physical cooling completion.
 
+Every VTherm used by Pellet Stove will require **exactly one underlying**, in both dry-contact and `climate` modes. Zero or multiple underlyings violate this contract; no entity will be selected arbitrarily. Dry contact requires an `over_switch` VTherm with one ON/OFF `switch`: the user confirms the contact is bistable, as Home Assistant cannot verify that hardware behavior.
+
+Dry-contact mode will be an **explicit option in each VTherm's Pellet Stove configuration**, with a warning about these limitations before confirmation. Minimum durations and cooldown are time-based protections, not physical confirmation. The choice applies only to the selected VTherm: no common setting, reload or migration may automatically activate this mode on other entries. Without a confirmed choice, preserve existing mode.
+
+In dry contact, **power and boost settings will be hidden and ineffective**, even when legacy or shared values are stored. Previous values will be preserved, including when saving the form, for an explicit return to `climate` mode under its rules. Entries remaining in `climate` mode are not changed by this neutralization.
+
 State following, persistence/recovery and reconciliation also apply to a `climate` underlying such as Duepi-EVO. Retain its available burner/phase information and protections: requested HVAC mode is not proof of heating, and HVAC OFF does not prove cooling completion. Binary rules below describe dry contact; a `climate` is not reduced to an ON/OFF relay.
 
 - At Home Assistant shutdown, save cycle state and ON, OFF and presumed-cooling counters. Resume them at startup without crediting downtime.
@@ -66,7 +72,23 @@ After a stop request, an intermediate **“stop pending”** state distinguishes
 
 Previous state still displayed because of polling does not alone mean failure or a new external action. It causes no immediate alert, repeated order on every evaluation or automatic opposite command. Pending does not make Pellet Stove `unavailable` while its underlying remains available. The functional label `Cooldown` must be mapped to values actually exposed by the target Duepi-EVO version; inspected local code exposes `Cooling down`.
 
-Anomaly timeout, errors, other acknowledgement sequences, contradictory in-flight commands and detailed `climate` phase mapping still require decisions/design before implementation.
+Stop confirmation is awaited **indefinitely**: if confirmation never arrives, remain pending without alerts solely from elapsed time or automatic command retries. Keep monitoring and automatically reconcile when a relevant observation arrives, however late. Do not claim stop success or cooling progress from the command or elapsed time alone. Explicit OFF/safety priorities remain applicable; actual unavailability follows the rules above. Waiting does not guarantee hardware shutdown.
+
+If the Duepi-EVO burner is directly observed as **`Off`** after requesting stop, also accept it as confirmation and automatically reconcile: previously observed `Cooldown` is not required. Do not invent past cooling duration or backdate counters. Adoption alone issues no command and preserves guards for subsequent ignition. Requested HVAC mode alone does not replace burner observation.
+
+For **dry contact**, observed relay **OFF** after requesting stop confirms the command and ends pending. Minimum-OFF and cooldown counters start at that observation, not command dispatch. Cooling remains presumed and physical stove shutdown is not claimed. Repeated unchanged OFF does not reset counters; acknowledgement alone issues no new order. Guards for subsequent ignition remain applicable.
+
+After requesting ON, expose **“awaiting start confirmation”** without equating a command with actual heating. For dry contact, observed relay ON acknowledges the command and starts minimum ON: it means active contact/heating requested only. For Duepi-EVO, an observed burner startup phase acknowledges without waiting for actual heating; continue tracking phases and protections. Service return or HVAC `heat` alone is insufficient. Acknowledgement issues no command and stable states do not reset counters. Explicit OFF and safety retain priority; actual unavailability follows the rules above.
+
+If a Duepi-EVO **burner heating phase** is directly observed after requesting ON, it also confirms startup: leave pending and automatically reconcile without requiring observed startup. Do not invent the missed phase, its duration or counter age. HVAC `heat` alone is insufficient; acknowledgement alone issues no command and preserves minimum durations and OFF/safety priorities.
+
+If an ON/OFF command explicitly reports an error, retain last observed state and expose the error separately from a simple delay. Do not automatically retry, including through periodic evaluations. An error proves neither a transition nor absence of hardware effect: keep monitoring and automatically reconcile if the underlying changes despite the error. A later observed acknowledgement confirms transition without manual intervention; keep the error accessible in diagnostics. A call error alone does not make Pellet Stove `unavailable` while the underlying remains available; explicit OFF/safety and unavailability rules still apply.
+
+An **explicit OFF or safety OFF immediately takes priority**, even while ON awaits confirmation: neither that wait nor minimum ON delays the stop request. Account for late ON/startup/heating observations without restoring the former ON request or cancelling OFF. Stop is confirmed only by the appropriate observation. If unavailable, retain priority without claiming stop transmission or execution. Cancellation of an already transmitted ON and actual command ordering still require technical design: this rule does not guarantee immediate hardware shutdown.
+
+An **ON request during an ongoing stop is silently ignored**: no ON command, rejection alert or retention for later. There is no replay after stop acknowledgement or guard expiry. More generally, ON requests violating the rules are not held pending. Only a fresh evaluation of current demand, compliant with guards and safety, may decide a new ON. Ignoring the request does not change observed state: in the described case, the thermostat is still ON until stop is confirmed. Silent normal rejection does not hide explicit command errors.
+
+The in-flight ordering mechanism, HA error presentation and detailed `climate` phase mapping still require design work before implementation.
 
 ## 1. Prerequisites
 
