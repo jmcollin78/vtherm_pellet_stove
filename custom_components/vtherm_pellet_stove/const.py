@@ -22,6 +22,8 @@ PROP_FUNCTION_PELLET_REGULATION = "pellet_regulation"
 
 #: Unique ID of the target VTherm (absent for the global defaults entry).
 CONF_TARGET_VTHERM = "target_vtherm_unique_id"
+CONF_DRY_CONTACT = "dry_contact"
+CONF_BISTABLE_CONFIRMED = "bistable_confirmed"
 
 #: Key used to read the proportional function name from a VTherm config entry.
 CONF_PROP_FUNCTION = "proportional_function"

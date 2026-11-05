@@ -113,6 +113,7 @@ class PelletDebugSensor(SensorEntity):
         self,
         controller: "PelletRegulationController",
         now: datetime | None = None,
+        *, diagnostics: dict[str, Any] | None = None,
     ) -> None:
         """Met à jour l'état du capteur à partir du contrôleur.
 
@@ -123,6 +124,13 @@ class PelletDebugSensor(SensorEntity):
             now = datetime.now(timezone.utc)
 
         attrs = controller.get_debug_attributes(now)
+        self._attr_available = attrs["available"]
+        entities = self._thermostat.entry_infos.get("underlying_entity_ids") or []
+        attrs["target_entity_id"] = entities[0] if len(entities) == 1 else None
+        attrs["vtherm_unique_id"] = self._thermostat.unique_id
+        observed = self._thermostat.hass.states.get(attrs["target_entity_id"]) if attrs["target_entity_id"] else None
+        attrs["raw_state"] = observed.state if observed is not None else None
+        attrs.update(diagnostics or {})
         self._phase = attrs.get("phase", "unknown")
         self._attributes = attrs
 

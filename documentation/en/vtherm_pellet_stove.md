@@ -8,6 +8,7 @@
 
 - [vtherm\_pellet\_stove — User Guide](#vtherm_pellet_stove--user-guide)
   - [Table of contents](#table-of-contents)
+  - [Underlying state following and reconciliation: planned behavior](#underlying-state-following-and-reconciliation-planned-behavior)
   - [1. Prerequisites](#1-prerequisites)
   - [2. Installation](#2-installation)
     - [Via HACS (recommended)](#via-hacs-recommended)
@@ -42,6 +43,64 @@
 
 ---
 
+## Underlying state following and reconciliation: planned behavior
+
+> Issue #9: development implementation on this branch, checked with simulated tests. Not released or validated on a real stove or every advertised version. Local tests use HA 2026.3.1, Python 3.14.10 and vtherm-api 0.8.0. See the [specifications](issue-9-specifications.md) and [development report](../tech-docs/issue-9-review.md).
+
+In dry-contact mode, the relay exposes ON/OFF only: it confirms neither flame, actual heating nor physical cooling completion.
+
+Every VTherm used by Pellet Stove requires **exactly one underlying**, in both dry-contact and `climate` modes. Zero or multiple underlyings are rejected; no entity is selected arbitrarily. Dry contact requires an `over_switch` VTherm with one ON/OFF `switch`: the user confirms the contact is bistable, as Home Assistant cannot verify that hardware behavior.
+
+Dry-contact mode is an **explicit option in each VTherm's Pellet Stove configuration**, with a warning about these limitations before confirmation. Minimum durations and cooldown are time-based protections, not physical confirmation. The choice applies only to the selected VTherm: no common setting, reload or migration automatically activates this mode on other entries. Without a confirmed choice, existing mode is preserved.
+
+In dry contact, **power and boost settings are hidden and ineffective**, even when legacy or shared values are stored. Previous values are preserved, including when saving the form, for an explicit return to `climate` mode under its rules. Entries remaining in `climate` mode are not changed by this neutralization.
+
+To configure dry contact:
+
+1. Create an `over_switch` VTherm with the single relay `switch` and `pellet_regulation`. No intermediate generic thermostat is required.
+2. Add a Pellet Stove entry for that VTherm and select **Dry contact**. In Options or Reconfigure, select this mode before editing settings.
+3. Read the warning, confirm bistability and set `min_on_duration_min`, `min_off_duration_min` and `cooldown_duration_min` according to the stove manufacturer.
+4. Save. Cancelling before confirmation leaves the existing entry unchanged. Standard relay commands are `turn_on`/`turn_off`; custom commands must have a consistent ON/OFF command/state contract.
+
+**Warning: ON does not prove ignition. After OFF, cooling is only presumed. A cooldown that is too short may allow restarting while the stove is still cooling.**
+
+State following, persistence/recovery and reconciliation also apply to a `climate` underlying such as Duepi-EVO. Retain its available burner/phase information and protections: requested HVAC mode is not proof of heating, and HVAC OFF does not prove cooling completion. Binary rules below describe dry contact; a `climate` is not reduced to an ON/OFF relay.
+
+- At Home Assistant shutdown, save cycle state and ON, OFF and presumed-cooling counters. Resume them at startup without crediting downtime.
+- If the relay is unavailable at startup or runtime, Pellet Stove itself remains `unavailable`. Pause counters and regulation decisions without issuing a default shutdown, and wait for recovery **indefinitely**.
+- On usable ON/OFF recovery, automatically reconcile before resuming regulation. If observed and retained state agree, resume counters without resetting them.
+- If states differ, adopt relay state and start its corresponding minimum durations at this observation. Retained OFF to observed ON: full minimum ON (`min_on_duration_min`). Retained ON to observed OFF: presumed-cooling and minimum-OFF counters start at zero; another ON requires `min_off_duration_min + cooldown_duration_min` and current heat demand.
+- Without a usable snapshot, including first installation or data loss after abrupt shutdown, adopt the first usable ON/OFF and zero its corresponding counters: full minimum ON when ON, full minimum OFF plus cooldown when OFF. Wait indefinitely if the relay is unavailable. If a usable matching snapshot survives an abrupt shutdown, resume its values without adding unsaved time.
+- Startup and reconciliation themselves issue no ON/OFF command. Explicit OFF and safety retain priority where commanding is possible, without hardware delivery guarantees.
+
+Example: 30-minute minimum ON, 20 elapsed minutes saved, relay still ON at recovery: 10 minutes remain. If saved state was OFF but the relay returns ON, the 30-minute minimum starts at the recovery observation without assuming when the relay actually changed.
+
+External actions during normal operation are also followed: adopt observed state, start counters corresponding to the change, then continue according to demand, minimum durations and safety without user acknowledgement. For dry contact, external ON starts minimum ON; external OFF starts minimum OFF and cooldown. For `climate`, preserve burner phases and guards without restarting the whole cycle at every phase progression. Unchanged-state publications do not reset counters. Adoption alone does not command a reversal of the external action.
+
+After a stop request, an intermediate **“stop pending”** state distinguishes the requested command from last observed state. For Duepi-EVO, burner **`Cooldown`** acknowledges the request: leave pending and track cooling. Later `Off` is not required for acknowledgement; `Cooldown` does not mean cooling is complete.
+
+Previous state still displayed because of polling does not alone mean failure or a new external action. It causes no immediate alert, repeated order on every evaluation or automatic opposite command. Pending does not make Pellet Stove `unavailable` while its underlying remains available. Mapping accepts `Cooling down` (local Duepi 2026.03.0) and `Cooldown`. `Ignition starting` and `Flame On` acknowledge ON. `Cleaning` and `Eco idle` are non-heating; after OFF, either immediately ends pending, including after an error. The first observation establishing the OFF cycle zeroes its counters; progression to `Cooling down` or `Off` does not reset them.
+
+Stop confirmation is awaited **indefinitely**: if confirmation never arrives, remain pending without alerts solely from elapsed time or automatic command retries. Keep monitoring and automatically reconcile when a relevant observation arrives, however late. Do not claim stop success or cooling progress from the command or elapsed time alone. Explicit OFF/safety priorities remain applicable; actual unavailability follows the rules above. Waiting does not guarantee hardware shutdown.
+
+If the Duepi-EVO burner is directly observed as **`Off`** after requesting stop, also accept it as confirmation and automatically reconcile: previously observed `Cooldown` is not required. Do not invent past cooling duration or backdate counters. Adoption alone issues no command and preserves guards for subsequent ignition. Requested HVAC mode alone does not replace burner observation.
+
+For **dry contact**, observed relay **OFF** after requesting stop confirms the command and ends pending. Minimum-OFF and cooldown counters start at that observation, not command dispatch. Cooling remains presumed and physical stove shutdown is not claimed. Repeated unchanged OFF does not reset counters; acknowledgement alone issues no new order. Guards for subsequent ignition remain applicable.
+
+After requesting ON, expose **“awaiting start confirmation”** without equating a command with actual heating. For dry contact, observed relay ON acknowledges the command and starts minimum ON: it means active contact/heating requested only. For Duepi-EVO, an observed burner startup phase acknowledges without waiting for actual heating; continue tracking phases and protections. Service return or HVAC `heat` alone is insufficient. Acknowledgement issues no command and stable states do not reset counters. Explicit OFF and safety retain priority; actual unavailability follows the rules above.
+
+If a Duepi-EVO **burner heating phase** is directly observed after requesting ON, it also confirms startup: leave pending and automatically reconcile without requiring observed startup. Do not invent the missed phase, its duration or counter age. HVAC `heat` alone is insufficient; acknowledgement alone issues no command and preserves minimum durations and OFF/safety priorities.
+
+If an ON/OFF command explicitly reports an error, retain last observed state and expose the error separately from a simple delay. Do not automatically retry, including through periodic evaluations. An error proves neither a transition nor absence of hardware effect: keep monitoring and automatically reconcile if the underlying changes despite the error. A later observed acknowledgement confirms transition without manual intervention; keep the error accessible in diagnostics. A call error alone does not make Pellet Stove `unavailable` while the underlying remains available; explicit OFF/safety and unavailability rules still apply.
+
+An **explicit OFF or safety OFF immediately takes priority**, even while ON awaits confirmation: neither that wait nor minimum ON delays the stop request. Account for late ON/startup/heating observations without restoring the former ON request or cancelling OFF. Stop is confirmed only by the appropriate observation. If unavailable, retain priority without claiming stop transmission or execution. Cancellation of an already transmitted ON and actual command ordering still require technical design: this rule does not guarantee immediate hardware shutdown.
+
+An **ON request during an ongoing stop is silently ignored**: no ON command, rejection alert or retention for later. There is no replay after stop acknowledgement or guard expiry. More generally, ON requests violating the rules are not held pending. Only a fresh evaluation of current demand, compliant with guards and safety, may decide a new ON. Ignoring the request does not change observed state: in the described case, the thermostat is still ON until stop is confirmed. Silent normal rejection does not hide explicit command errors.
+
+The diagnostic sensor keeps its identifier and exposes `raw_state`, `observed_phase`, `observed_cycle`, `available`, `elapsed_on_sec`, `elapsed_off_sec`, `elapsed_cooldown_sec`, `remaining_on_sec`, `remaining_off_sec`, `pending_command`, `off_priority`, `resume_reason`, `command_error`, `target_error` and `storage_error`. The three counters use monotonic active time, paused outside HA and during unavailability; minimum OFF and cooldown share their origin without double counting. Legacy timestamps alone are not converted to active time. Expiry grants permission, never an automatic order independent of current demand.
+
+Deployment qualification remains necessary: VTherm can also command through initialization, keep-alive or repair paths. Its wrapper absorbs some service errors, which cannot be exposed as errors reported to the plugin. Handler tests do not guarantee absence of commands through those external paths, hardware ordering or delivery to the stove. Duepi marks the local `burner_status` source as deprecated; an alternative phase source must be validated before compatibility is claimed.
+
 ## 1. Prerequisites
 
 | Requirement                                                                | Minimum version |
@@ -50,7 +109,7 @@
 | [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0            |
 | HACS                                                                       | 1.34            |
 
-Your pellet stove **must already be exposed as a `climate` entity** in Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, or any other integration). This plugin does **not** communicate directly with stoves.
+Your stove must be exposed in Home Assistant as a `climate` entity with a recognized burner phase, or through one bistable relay `switch` in explicitly configured dry-contact mode. Requested HVAC mode alone is not a usable phase. This plugin does **not** communicate directly with stoves.
 
 ---
 
@@ -100,7 +159,7 @@ Refer to the [Versatile Thermostat documentation](https://github.com/jmcollin78/
 
 1. Go to **Settings → Devices & Services → Versatile Thermostat → Add**.
 2. Choose thermostat type **`over_switch`**.
-3. In the **Underlying entity** field, select the `climate` entity that controls your pellet stove (e.g. `climate.duepi_evo`).
+3. In the **Underlying entity** field, select exactly one entity: the stove `climate` (e.g. `climate.duepi_evo`) or the bistable dry-contact `switch`.
 4. In the **Proportional function** (algorithm) field, select **`pellet_regulation`**.
 5. Set the cycle duration (`cycle_min`) to `60` minutes.
 6. Set **Minimal activation delay** to `1800` s (30 min) and **Minimal deactivation delay** to `1500` s (25 min) — these should align with `min_on_duration_min` and `min_off_duration_min + cooldown_duration_min`.
@@ -109,6 +168,8 @@ Refer to the [Versatile Thermostat documentation](https://github.com/jmcollin78/
 ### Step 4 — Add the custom ON/OFF commands
 
 VTherm's `over_switch` mode sends two configurable service calls to the stove. These must be set on the **underlying entity** configuration page of the VTherm you just created:
+
+This step applies to a `climate` underlying. For a standard bistable `switch`, keep `turn_on`/`turn_off` and explicitly enable dry contact in the next step.
 
 1. Open the VTherm entity → **Options** → **Underlying entities** page.
 2. In the **Switch ON command** (`vswitch_on`) field, enter:
@@ -121,7 +182,7 @@ VTherm's `over_switch` mode sends two configurable service calls to the stove. T
    ```
 4. Save. VTherm will now call `climate.set_hvac_mode(hvac_mode=heat)` to ignite the stove and `climate.set_hvac_mode(hvac_mode=off)` to extinguish it.
 
-> **Why these commands?** Pellet stoves are exposed as `climate` entities, not `switch` entities. The `vswitch_on/off` syntax lets VTherm call any HA service in the format `service_name/key:value`.
+> **Why these commands?** A `climate` entity uses `set_hvac_mode`, unlike a dry-contact relay. The `vswitch_on/off` syntax lets VTherm call an HA service in the format `service_name/key:value`.
 
 ### Step 5 — Link vtherm_pellet_stove to the VTherm
 
@@ -129,7 +190,7 @@ Choose one of the two options depending on whether you need parameters specific 
 
 **Option A — Use the global defaults (no action needed)**
 
-If the global default parameters suit this stove, no additional step is required. The VTherm automatically picks up the global defaults because it is configured with the `pellet_regulation` algorithm.
+If the global default parameters suit this stove in `climate` mode, no additional step is required. Dry contact always requires an explicit local entry.
 
 **Option B — Create a per-thermostat entry (recommended for fine-tuning)**
 
@@ -169,7 +230,7 @@ Create a VTherm in **`over_switch`** mode and set the following options:
 | VTherm option                    | Value                                                                                   |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
 | **Thermostat type**              | `over_switch`                                                                           |
-| **Underlying entity**            | `climate.<your_stove>` (e.g. `climate.duepi_evo`)                                       |
+| **Underlying entity**            | One `climate.<your_stove>` or `switch.<bistable_relay>` with explicit local dry contact      |
 | **Proportional function**        | `pellet_regulation`                                                                     |
 | **`vswitch_on` command**         | `set_hvac_mode/hvac_mode:heat`                                                          |
 | **`vswitch_off` command**        | `set_hvac_mode/hvac_mode:off`                                                           |

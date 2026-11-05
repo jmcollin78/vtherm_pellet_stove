@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import voluptuous as vol
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
     CONF_COOLDOWN_DURATION_MIN,
+    CONF_DRY_CONTACT,
+    CONF_BISTABLE_CONFIRMED,
     CONF_HYSTERESIS_OFF,
     CONF_HYSTERESIS_ON,
     CONF_MAX_ON_PERCENT,
@@ -28,11 +31,12 @@ from .const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
+from .target import validate_target
 
 
-def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
+def build_options_schema(defaults: dict[str, Any], *, dry_contact: bool = False) -> vol.Schema:
     """Build the shared options schema from the given defaults."""
-    return vol.Schema(
+    schema = vol.Schema(
         {
             # -- Hysteresis --------------------------------------------------
             vol.Optional(
@@ -146,20 +150,87 @@ def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
         }
     )
+    if dry_contact:
+        fields = {key: value for key, value in schema.schema.items()
+                  if not str(key.schema).startswith("power_")}
+        fields[vol.Required(CONF_BISTABLE_CONFIRMED, default=False)] = selector.BooleanSelector()
+        return vol.Schema(fields)
+    return schema
 
 
 def build_user_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the per-thermostat schema (entity selector + options)."""
+    del defaults
     schema: dict[Any, Any] = {
         vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
         )
     }
-    schema.update(build_options_schema(defaults).schema)
+    schema[vol.Required(CONF_DRY_CONTACT, default=False)] = selector.BooleanSelector()
     return vol.Schema(schema)
 
 
-class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
+def target_infos(hass, unique_id: str) -> dict:
+    """Resolve a VTherm config entry without selecting an arbitrary entity."""
+    for entry in hass.config_entries.async_entries("versatile_thermostat"):
+        if entry.entry_id == unique_id or entry.unique_id == unique_id:
+            return {**entry.data, **entry.options}
+    raise ValueError("invalid_entity")
+
+
+class _LocalSettingsFlow:
+    """Share local mode selection, warning and validation between all flows."""
+
+    hass: HomeAssistant
+    async_show_form: Callable[..., Any]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pending_settings: dict[str, Any] = {}
+        self._settings_uid: str = ""
+        self._settings_title: str = ""
+        self._edit_entry = None
+
+    def _finish_settings(self, settings: dict[str, Any]):
+        raise NotImplementedError
+
+    async def async_step_mode(self, user_input=None):
+        if user_input is not None:
+            self._pending_settings[CONF_DRY_CONTACT] = user_input.get(CONF_DRY_CONTACT) is True
+            return await self._show_local_settings()
+        return self.async_show_form(
+            step_id="mode", data_schema=vol.Schema({
+                vol.Required(CONF_DRY_CONTACT, default=self._pending_settings.get(CONF_DRY_CONTACT, False)):
+                    selector.BooleanSelector(),
+            }),
+        )
+
+    async def _show_local_settings(self, user_input=None):
+        dry = self._pending_settings.get(CONF_DRY_CONTACT) is True
+        step_id = "dry_contact" if dry else "climate"
+        errors = {}
+        if user_input is not None:
+            settings = {**self._pending_settings, **user_input}
+            try:
+                validate_target(target_infos(self.hass, self._settings_uid), settings)
+            except ValueError as err:
+                errors["base"] = str(err)
+            else:
+                return self._finish_settings(settings)
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=build_options_schema(self._pending_settings, dry_contact=dry),
+            errors=errors,
+        )
+
+    async def async_step_dry_contact(self, user_input=None):
+        return await self._show_local_settings(user_input)
+
+    async def async_step_climate(self, user_input=None):
+        return await self._show_local_settings(user_input)
+
+
+class PelletStoveConfigFlow(_LocalSettingsFlow, ConfigFlow, domain=DOMAIN):
     """Manage Pellet Stove plugin config entries."""
 
     VERSION = 1
@@ -201,7 +272,8 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             entity_id = user_input.get(CONF_TARGET_VTHERM)
             registry = er.async_get(self.hass)
             reg_entry = registry.async_get(entity_id)
-            if reg_entry is None or reg_entry.unique_id is None:
+            if (reg_entry is None or reg_entry.unique_id is None
+                    or reg_entry.platform != "versatile_thermostat"):
                 return self.async_show_form(
                     step_id="thermostat",
                     data_schema=build_user_schema(dict(DEFAULT_OPTIONS)),
@@ -212,11 +284,12 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{DOMAIN}-{target_unique_id}")
             self._abort_if_unique_id_configured()
 
-            data = dict(user_input)
-            data[CONF_TARGET_VTHERM] = target_unique_id
+            self._pending_settings = {**DEFAULT_OPTIONS, **user_input}
+            self._pending_settings[CONF_TARGET_VTHERM] = target_unique_id
+            self._settings_uid = target_unique_id
             state = self.hass.states.get(entity_id)
-            title = state.name if state is not None else entity_id
-            return self.async_create_entry(title=title, data=data)
+            self._settings_title = state.name if state is not None else entity_id
+            return await self._show_local_settings()
 
         return self.async_show_form(
             step_id="thermostat",
@@ -234,6 +307,12 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
         thermostat(s) via ``async_setup_entry`` → ``_reload_pellet_vtherms``.
         """
         entry = self._get_reconfigure_entry()
+
+        if entry.data.get(CONF_TARGET_VTHERM) is not None:
+            self._edit_entry = entry
+            self._settings_uid = entry.data[CONF_TARGET_VTHERM]
+            self._pending_settings = {**DEFAULT_OPTIONS, **entry.data, **entry.options}
+            return await self.async_step_mode(user_input)
 
         if user_input is not None:
             # Merge new values into data while keeping CONF_TARGET_VTHERM (if
@@ -253,23 +332,36 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_options_schema(defaults),
         )
 
+    def _finish_settings(self, settings):
+        entry = getattr(self, "_edit_entry", None)
+        if entry is not None:
+            return self.async_update_reload_and_abort(entry, data=settings, options={})
+        return self.async_create_entry(title=self._settings_title, data=settings)
+
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return the options flow handler."""
         return PelletStoveOptionsFlow(config_entry)
 
 
-class PelletStoveOptionsFlow(OptionsFlow):
+class PelletStoveOptionsFlow(_LocalSettingsFlow, OptionsFlow):
     """Edit Pellet Stove plugin options."""
 
     def __init__(self, config_entry) -> None:
         """Store the config entry being edited."""
+        super().__init__()
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Handle the options flow."""
+        if self._config_entry.data.get(CONF_TARGET_VTHERM) is not None:
+            self._settings_uid = self._config_entry.data[CONF_TARGET_VTHERM]
+            self._pending_settings = {**DEFAULT_OPTIONS, **self._config_entry.data,
+                                      **self._config_entry.options}
+            return await self.async_step_mode(user_input)
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data={**self._config_entry.data,
+                                                           **self._config_entry.options, **user_input})
 
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
@@ -277,3 +369,6 @@ class PelletStoveOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=build_options_schema(defaults),
         )
+
+    def _finish_settings(self, settings):
+        return self.async_create_entry(title="", data=settings)

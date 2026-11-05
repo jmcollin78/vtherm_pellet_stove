@@ -125,6 +125,7 @@
             "thermostat": {
                 "title": "Pellet Stove — per thermostat",
                 "data": {
+                    "dry_contact": "Dry contact (explicit local opt-in)",
                     "target_vtherm_unique_id": "Target VTherm entity",
                     "hysteresis_on": "Heating start threshold (°C below target)",
                     "hysteresis_off": "Heating stop threshold (°C above target)",
@@ -140,13 +141,44 @@
                     "power_boost_enabled": "Enable boost after setpoint increase",
                     "power_boost_duration_min": "Boost duration (minutes)"
                 }
-            }
-        },
-        "abort": {
-            "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed.",
-            "reconfigure_successful": "Configuration updated and integration reloaded."
-        },
-        "step": {
+            },
+            "mode": {
+                "title": "VTherm command mode",
+                "data": {"dry_contact": "Dry contact (explicit local opt-in)"}
+            },
+            "dry_contact": {
+                "title": "Dry contact: confirmation and durations",
+                "description": "ON means an active contact, not confirmed ignition or flame. After OFF, cooling is only presumed. Set durations according to your stove: a cooldown that is too short may allow restarting while it is still cooling. Confirm that your relay is bistable, without pulses. Minimum OFF and cooldown are added, using active time only.",
+                "data": {
+                    "bistable_confirmed": "I confirm the contact is bistable (maintained ON/OFF, no pulses)",
+                    "hysteresis_on": "Start threshold (°C below target)",
+                    "hysteresis_off": "Stop threshold (°C above target)",
+                    "min_on_percent": "on_percent when OFF",
+                    "max_on_percent": "on_percent when ON",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Presumed cooling (minutes)",
+                    "safety_room_temp": "Safety room temperature (°C)"
+                }
+            },
+            "climate": {
+                "title": "Climate control settings",
+                "data": {
+                    "hysteresis_on": "Start threshold (°C below target)",
+                    "hysteresis_off": "Stop threshold (°C above target)",
+                    "min_on_percent": "on_percent when OFF",
+                    "max_on_percent": "on_percent when heating",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Cooldown (minutes)",
+                    "safety_room_temp": "Safety room temperature (°C)",
+                    "power_control_enabled": "Enable power control",
+                    "power_control_attribute": "Power attribute",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            },
             "reconfigure": {
                 "title": "Pellet Stove — reconfigure",
                 "description": "Update the regulation parameters. The integration will reload automatically so the new values take effect immediately.",
@@ -167,12 +199,62 @@
                 }
             }
         },
+        "abort": {
+            "single_instance_allowed": "Only one Pellet Stove global configuration entry is allowed.",
+            "reconfigure_successful": "Configuration updated and integration reloaded."
+        },
         "error": {
+            "single_underlying_required": "The VTherm must have exactly one underlying.",
+            "invalid_underlying": "This mode requires one climate target.",
+            "invalid_dry_contact": "Dry contact requires an over_switch VTherm, one switch and bistability confirmation.",
             "invalid_entity": "The selected climate entity cannot be linked to a VT unique identifier."
         }
     },
     "options": {
+        "error": {
+            "single_underlying_required": "The VTherm must have exactly one underlying.",
+            "invalid_underlying": "This mode requires one climate target.",
+            "invalid_dry_contact": "Dry contact requires an over_switch VTherm, one switch and bistability confirmation.",
+            "invalid_entity": "The target VTherm was not found."
+        },
         "step": {
+            "mode": {
+                "title": "VTherm command mode",
+                "data": {"dry_contact": "Dry contact (explicit local opt-in)"}
+            },
+            "dry_contact": {
+                "title": "Dry contact: confirmation and durations",
+                "description": "ON means an active contact, not confirmed ignition or flame. After OFF, cooling is only presumed. Set durations according to your stove: a cooldown that is too short may allow restarting while it is still cooling. Confirm that your relay is bistable, without pulses. Minimum OFF and cooldown are added, using active time only.",
+                "data": {
+                    "bistable_confirmed": "I confirm the contact is bistable (maintained ON/OFF, no pulses)",
+                    "hysteresis_on": "Start threshold (°C below target)",
+                    "hysteresis_off": "Stop threshold (°C above target)",
+                    "min_on_percent": "on_percent when OFF",
+                    "max_on_percent": "on_percent when ON",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Presumed cooling (minutes)",
+                    "safety_room_temp": "Safety room temperature (°C)"
+                }
+            },
+            "climate": {
+                "title": "Climate control settings",
+                "data": {
+                    "hysteresis_on": "Start threshold (°C below target)",
+                    "hysteresis_off": "Stop threshold (°C above target)",
+                    "min_on_percent": "on_percent when OFF",
+                    "max_on_percent": "on_percent when heating",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Cooldown (minutes)",
+                    "safety_room_temp": "Safety room temperature (°C)",
+                    "power_control_enabled": "Enable power control",
+                    "power_control_attribute": "Power attribute",
+                    "power_default_level_index": "Default power level index",
+                    "power_boost_enabled": "Enable boost",
+                    "power_boost_duration_min": "Boost duration (minutes)"
+                }
+            },
             "init": {
                 "title": "Pellet Stove — options",
                 "data": {

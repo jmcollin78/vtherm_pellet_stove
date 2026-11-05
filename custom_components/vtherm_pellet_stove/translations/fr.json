@@ -125,6 +125,7 @@
             "thermostat": {
                 "title": "Poêle à Pellets — par thermostat",
                 "data": {
+                    "dry_contact": "Contact sec (activation locale explicite)",
                     "target_vtherm_unique_id": "Thermostat VTherm cible",
                     "hysteresis_on": "Seuil de démarrage (°C en dessous de la consigne)",
                     "hysteresis_off": "Seuil d'extinction (°C au-dessus de la consigne)",
@@ -140,13 +141,44 @@
                     "power_boost_enabled": "Activer le boost après hausse de consigne",
                     "power_boost_duration_min": "Durée du boost (minutes)"
                 }
-            }
-        },
-        "abort": {
-            "single_instance_allowed": "Une seule entrée de configuration globale est autorisée.",
-            "reconfigure_successful": "Configuration mise à jour et intégration rechargée."
-        },
-        "step": {
+            },
+            "mode": {
+                "title": "Mode de commande du VTherm",
+                "data": {"dry_contact": "Contact sec (activation locale explicite)"}
+            },
+            "dry_contact": {
+                "title": "Contact sec : confirmation et durées",
+                "description": "ON indique un contact actif, pas un allumage ni une flamme confirmés. Après OFF, le refroidissement est seulement présumé. Réglez les durées selon votre poêle : un cooldown trop court peut autoriser un rallumage pendant son refroidissement. Confirmez que votre relais est bistable, sans impulsion. Minimum OFF et cooldown sont additionnés, en temps actif uniquement.",
+                "data": {
+                    "bistable_confirmed": "Je confirme que le contact est bistable (ON/OFF maintenu, sans impulsion)",
+                    "hysteresis_on": "Seuil de démarrage (°C sous la consigne)",
+                    "hysteresis_off": "Seuil d'arrêt (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt",
+                    "max_on_percent": "on_percent en marche",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Refroidissement présumé (minutes)",
+                    "safety_room_temp": "Température de sécurité (°C)"
+                }
+            },
+            "climate": {
+                "title": "Commande climate : réglages",
+                "data": {
+                    "hysteresis_on": "Seuil de démarrage (°C sous la consigne)",
+                    "hysteresis_off": "Seuil d'arrêt (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt",
+                    "max_on_percent": "on_percent en chauffe",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Cooldown (minutes)",
+                    "safety_room_temp": "Température de sécurité (°C)",
+                    "power_control_enabled": "Activer la puissance",
+                    "power_control_attribute": "Attribut de puissance",
+                    "power_default_level_index": "Index de puissance par défaut",
+                    "power_boost_enabled": "Activer le boost",
+                    "power_boost_duration_min": "Durée du boost (minutes)"
+                }
+            },
             "reconfigure": {
                 "title": "Poêle à Pellets — reconfiguration",
                 "description": "Modifiez les paramètres de régulation. L'intégration se rechargera automatiquement pour que les nouvelles valeurs soient immédiatement prises en compte.",
@@ -167,12 +199,62 @@
                 }
             }
         },
+        "abort": {
+            "single_instance_allowed": "Une seule entrée de configuration globale est autorisée.",
+            "reconfigure_successful": "Configuration mise à jour et intégration rechargée."
+        },
         "error": {
+            "single_underlying_required": "Le VTherm doit avoir exactement un sous-jacent.",
+            "invalid_underlying": "Une cible climate unique est requise dans ce mode.",
+            "invalid_dry_contact": "Le contact sec exige un VTherm over_switch, un switch unique et la confirmation bistable.",
             "invalid_entity": "L'entité climate sélectionnée ne peut pas être liée à un identifiant VTherm."
         }
     },
     "options": {
+        "error": {
+            "single_underlying_required": "Le VTherm doit avoir exactement un sous-jacent.",
+            "invalid_underlying": "Une cible climate unique est requise dans ce mode.",
+            "invalid_dry_contact": "Le contact sec exige un VTherm over_switch, un switch unique et la confirmation bistable.",
+            "invalid_entity": "Le VTherm cible est introuvable."
+        },
         "step": {
+            "mode": {
+                "title": "Mode de commande du VTherm",
+                "data": {"dry_contact": "Contact sec (activation locale explicite)"}
+            },
+            "dry_contact": {
+                "title": "Contact sec : confirmation et durées",
+                "description": "ON indique un contact actif, pas un allumage ni une flamme confirmés. Après OFF, le refroidissement est seulement présumé. Réglez les durées selon votre poêle : un cooldown trop court peut autoriser un rallumage pendant son refroidissement. Confirmez que votre relais est bistable, sans impulsion. Minimum OFF et cooldown sont additionnés, en temps actif uniquement.",
+                "data": {
+                    "bistable_confirmed": "Je confirme que le contact est bistable (ON/OFF maintenu, sans impulsion)",
+                    "hysteresis_on": "Seuil de démarrage (°C sous la consigne)",
+                    "hysteresis_off": "Seuil d'arrêt (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt",
+                    "max_on_percent": "on_percent en marche",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Refroidissement présumé (minutes)",
+                    "safety_room_temp": "Température de sécurité (°C)"
+                }
+            },
+            "climate": {
+                "title": "Commande climate : réglages",
+                "data": {
+                    "hysteresis_on": "Seuil de démarrage (°C sous la consigne)",
+                    "hysteresis_off": "Seuil d'arrêt (°C au-dessus de la consigne)",
+                    "min_on_percent": "on_percent en arrêt",
+                    "max_on_percent": "on_percent en chauffe",
+                    "min_on_duration_min": "Minimum ON (minutes)",
+                    "min_off_duration_min": "Minimum OFF (minutes)",
+                    "cooldown_duration_min": "Cooldown (minutes)",
+                    "safety_room_temp": "Température de sécurité (°C)",
+                    "power_control_enabled": "Activer la puissance",
+                    "power_control_attribute": "Attribut de puissance",
+                    "power_default_level_index": "Index de puissance par défaut",
+                    "power_boost_enabled": "Activer le boost",
+                    "power_boost_duration_min": "Durée du boost (minutes)"
+                }
+            },
             "init": {
                 "title": "Poêle à Pellets — options",
                 "data": {

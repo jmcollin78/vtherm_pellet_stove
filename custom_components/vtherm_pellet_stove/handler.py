@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from math import isfinite
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import Context
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import slugify
 from vtherm_api.log_collector import get_vtherm_logger
 
 from .const import (
     CONF_COOLDOWN_DURATION_MIN,
+    CONF_DRY_CONTACT,
+    CONF_BISTABLE_CONFIRMED,
     CONF_HYSTERESIS_OFF,
     CONF_HYSTERESIS_ON,
     CONF_MAX_ON_PERCENT,
@@ -41,6 +47,7 @@ from .const import (
 )
 from .pellet.controller import HVAC_MODE_OFF, PelletRegulationController
 from .sensor import PelletDebugSensor
+from .target import observe_target, validate_target
 
 if TYPE_CHECKING:
     from vtherm_api.interfaces import InterfaceCycleScheduler, InterfaceThermostatRuntime
@@ -114,6 +121,10 @@ def _resolve_options(hass: Any, vtherm_uid: str | None) -> dict[str, Any]:
         )
         opts.update(dict(selected_entry.options or selected_entry.data))
 
+    local = dict(per_entry.options or per_entry.data) if per_entry is not None else {}
+    opts[CONF_DRY_CONTACT] = local.get(CONF_DRY_CONTACT) is True
+    opts[CONF_BISTABLE_CONFIRMED] = local.get(CONF_BISTABLE_CONFIRMED) is True
+
     _LOGGER.debug("%s - _resolve_options: completed", DOMAIN)
     return opts
 
@@ -137,6 +148,13 @@ class PelletRegulationHandler:
         self._reset_lock = asyncio.Lock()
         self._resetting = False
         self._removed = False
+        self._restored = False
+        self._unsubscribers: list = []
+        self._target_error: str | None = None
+        self._storage_error: str | None = None
+        self._bound_target: dict | None = None
+        self._stopping = False
+        self._storage_lock: asyncio.Lock | None = None
         _LOGGER.debug("%s - __init__: handler created", self._thermostat.name)
 
     # ------------------------------------------------------------------
@@ -150,6 +168,11 @@ class PelletRegulationHandler:
         vtherm_uid = self._thermostat.unique_id
 
         self._opts = _resolve_options(hass, vtherm_uid)
+        self._bound_target = self._target_identity()
+        domain_data = hass.data.setdefault(DOMAIN, {})
+        self._storage_lock = domain_data.setdefault("cycle_storage_locks", {}).setdefault(
+            vtherm_uid, asyncio.Lock()
+        )
 
         self._controller = PelletRegulationController(
             name=self._thermostat.name,
@@ -161,10 +184,10 @@ class PelletRegulationHandler:
             min_off_duration_min=int(self._opts[CONF_MIN_OFF_DURATION_MIN]),
             cooldown_duration_min=int(self._opts[CONF_COOLDOWN_DURATION_MIN]),
             safety_room_temp=float(self._opts[CONF_SAFETY_ROOM_TEMP]),
-            power_control_enabled=bool(self._opts[CONF_POWER_CONTROL_ENABLED]),
+            power_control_enabled=bool(self._opts[CONF_POWER_CONTROL_ENABLED]) and not self._opts[CONF_DRY_CONTACT],
             power_levels=list(self._opts.get(CONF_POWER_LEVELS) or []) or None,
             power_default_level_index=int(self._opts[CONF_POWER_DEFAULT_LEVEL_INDEX]),
-            power_boost_enabled=bool(self._opts[CONF_POWER_BOOST_ENABLED]),
+            power_boost_enabled=bool(self._opts[CONF_POWER_BOOST_ENABLED]) and not self._opts[CONF_DRY_CONTACT],
             power_boost_duration_min=int(self._opts[CONF_POWER_BOOST_DURATION_MIN]),
         )
 
@@ -218,12 +241,12 @@ class PelletRegulationHandler:
                 min_off_duration_min=int(options[CONF_MIN_OFF_DURATION_MIN]),
                 cooldown_duration_min=int(options[CONF_COOLDOWN_DURATION_MIN]),
                 safety_room_temp=float(options[CONF_SAFETY_ROOM_TEMP]),
-                power_control_enabled=bool(options[CONF_POWER_CONTROL_ENABLED]),
+                power_control_enabled=bool(options[CONF_POWER_CONTROL_ENABLED]) and not options[CONF_DRY_CONTACT],
                 power_levels=list(options.get(CONF_POWER_LEVELS) or []) or None,
                 power_default_level_index=int(
                     options[CONF_POWER_DEFAULT_LEVEL_INDEX]
                 ),
-                power_boost_enabled=bool(options[CONF_POWER_BOOST_ENABLED]),
+                power_boost_enabled=bool(options[CONF_POWER_BOOST_ENABLED]) and not options[CONF_DRY_CONTACT],
                 power_boost_duration_min=int(
                     options[CONF_POWER_BOOST_DURATION_MIN]
                 ),
@@ -286,14 +309,35 @@ class PelletRegulationHandler:
     async def async_added_to_hass(self) -> None:
         """Restore persistent state when the thermostat entity is added to HA."""
         _LOGGER.debug("%s - async_added_to_hass: start", self._thermostat.name)
-        if self._controller is None or self._store is None:
+        if self._restored or self._controller is None or self._store is None:
             _LOGGER.debug(
                 "%s - async_added_to_hass: skipped (controller/store not ready)",
                 self._thermostat.name,
             )
             return
 
-        data = await self._store.async_load()
+        try:
+            async with self._storage_lock:
+                cached = self._thermostat.hass.data.get(DOMAIN, {}).get(
+                    "cycle_snapshots", {}
+                ).get(self._thermostat.unique_id)
+                data = deepcopy(cached) if cached is not None else await self._store.async_load()
+        except (HomeAssistantError, OSError, ValueError) as err:
+            self._storage_error = str(err)
+            self._controller.state.resume_reason = "invalid"
+            data = None
+        if isinstance(data, dict) and "target" in data:
+            if data.get("target") != self._target_identity():
+                data = None
+                self._controller.state.resume_reason = "invalid"
+            else:
+                data = {key: value for key, value in data.items() if key != "target"}
+        elif isinstance(data, dict) and data.get("cycle_version") is not None:
+            data = None
+            self._controller.state.resume_reason = "invalid"
+        if data is not None and not isinstance(data, dict):
+            data = None
+            self._controller.state.resume_reason = "invalid"
         if data:
             _LOGGER.debug("%s - async_added_to_hass: persisted data found", self._thermostat.name)
             self._controller.restore_state(data)
@@ -314,6 +358,7 @@ class PelletRegulationHandler:
             _LOGGER.debug("%s - async_added_to_hass: no persisted data", self._thermostat.name)
 
         self.attach_debug_sensor()
+        self._restored = True
 
     def attach_debug_sensor(self) -> None:
         """Create or reuse this handler's sensor on the active global platform."""
@@ -362,30 +407,22 @@ class PelletRegulationHandler:
         """Run startup actions after thermostat initialisation."""
         _LOGGER.debug("%s - async_startup: start", self._thermostat.name)
 
-        # Guard: if the restored state says is_heating=True but VTherm is in
-        # hvac_mode=off, the state is stale (HA shut down between the user
-        # pressing OFF and the handler saving is_heating=False). Correct it
-        # WITHOUT touching last_off_at so that the min_off+cooldown guard is
-        # not armed from now — the user should be able to switch back to
-        # "heat" immediately without waiting up to 60 min.
-        #
-        # This check MUST live here (not in async_added_to_hass) because
-        # ThermostatProp calls our async_added_to_hass() BEFORE
-        # super().async_added_to_hass(), so vtherm_hvac_mode is still None
-        # when async_added_to_hass() runs.  async_startup() is called AFTER
-        # super().async_startup(), so VTherm is fully initialised here.
-        if self._controller is not None and self._controller.is_heating:
-            hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
-            if hvac_mode == HVAC_MODE_OFF:
-                _LOGGER.warning(
-                    "%s - async_startup: stale is_heating=True detected while "
-                    "hvac_mode=off — correcting to is_heating=False without "
-                    "resetting last_off_at",
-                    self._thermostat.name,
-                )
-                self._controller.state.is_heating = False
-
-        await self.on_state_changed(True)
+        async with self._control_lock:
+            if not self._restored:
+                await self.async_added_to_hass()
+            self._observe_underlying()
+            await self._publish_current_state(datetime.now(timezone.utc))
+        if not self._unsubscribers:
+            entities = self._thermostat.entry_infos.get(_CONF_UNDERLYING_LIST) or []
+            self._unsubscribers.append(async_track_state_change_event(
+                self._thermostat.hass, entities, self._async_observation_changed
+            ))
+            self._unsubscribers.append(async_track_time_interval(
+                self._thermostat.hass, self._async_observation_changed, timedelta(seconds=30)
+            ))
+            self._unsubscribers.append(self._thermostat.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STOP, self._async_shutdown
+            ))
         if not self._removed:
             self._thermostat.hass.data.setdefault(DOMAIN, {}).setdefault(
                 DATA_HANDLERS, {}
@@ -431,7 +468,9 @@ class PelletRegulationHandler:
                     if self._debug_sensor is not None:
                         self._debug_sensor.update_from_controller(self._controller)
                     try:
-                        await self._store.async_save(self._controller.save_state())
+                        snapshot = self._cache_cycle()
+                        async with self._storage_lock:
+                            await self._store.async_save(snapshot)
                     except (HomeAssistantError, OSError) as err:
                         raise HomeAssistantError(
                             translation_domain=DOMAIN,
@@ -442,8 +481,15 @@ class PelletRegulationHandler:
 
     def remove(self) -> None:
         """Persist current state and release resources."""
-        self._removed = True
         handlers = self._thermostat.hass.data.get(DOMAIN, {}).get(DATA_HANDLERS, {})
+        if (self._controller is not None and not self._stopping
+                and handlers.get(self._thermostat.unique_id) in (None, self)):
+            self._observe_underlying()
+            self._cache_cycle()
+        self._removed = True
+        for unsubscribe in self._unsubscribers:
+            unsubscribe()
+        self._unsubscribers.clear()
         if handlers.get(self._thermostat.unique_id) is self:
             handlers.pop(self._thermostat.unique_id)
         _LOGGER.debug("%s - remove: start", self._thermostat.name)
@@ -486,7 +532,7 @@ class PelletRegulationHandler:
             if handlers.get(self._thermostat.unique_id) not in (None, self):
                 return
             if self._store is not None and self._controller is not None:
-                await self._store.async_save(self._controller.save_state())
+                await self._save_cycle()
 
     async def control_heating(
         self,
@@ -496,7 +542,7 @@ class PelletRegulationHandler:
         """Serialize control and skip callbacks during reset or removal."""
 
         async with self._control_lock:
-            if self._resetting or self._removed:
+            if self._resetting or self._removed or self._stopping:
                 return
             await self._async_control_heating(timestamp, force)
 
@@ -519,133 +565,55 @@ class PelletRegulationHandler:
             )
             return
 
-        _LOGGER.info("%s - control_heating: running control loop", self._thermostat.name)
-
+        if not self._restored:
+            await self.async_added_to_hass()
         now = timestamp if timestamp is not None else datetime.now(timezone.utc)
-
-        target = self._thermostat.target_temperature
-        current = self._thermostat.current_temperature
-        slope = self._thermostat.last_temperature_slope
-        hvac_mode = self._thermostat.vtherm_hvac_mode or "off"
-
-        if target is None:
-            if (
-                current is not None
-                and current >= self._controller.safety_room_temp
-                and self._controller.force_safety_off(now)
-            ):
-                _LOGGER.warning(
-                    "%s - safety threshold reached without a target; requesting OFF",
-                    self._thermostat.name,
-                )
-                if self._scheduler is not None and str(hvac_mode).lower() != HVAC_MODE_OFF:
-                    await self._scheduler.start_cycle(
-                        hvac_mode, self._controller.on_percent, True
-                    )
-                    await self._scheduler.cancel_cycle()
-                await self._publish_current_state(now)
-                return
-            _LOGGER.debug(
-                "%s - control_heating: no target temperature, skipping",
-                self._thermostat.name,
-            )
+        self._observe_underlying()
+        state = self._controller.state
+        hvac_mode = self._thermostat.vtherm_hvac_mode
+        if hvac_mode is None:
+            await self._publish_current_state(now)
             return
-
-        # 1. Compute on_percent via the pellet controller.
-        was_heating = self._controller.is_heating
-        on_percent = self._controller.calculate(
-            target_temp=target,
-            current_temp=current,
-            slope=slope,
-            hvac_mode=hvac_mode,
-            now=now,
-            allow_turn_on=self._physical_heating_state() is False,
+        durations_valid = all(
+            isinstance(self._opts.get(key), (int, float))
+            and not isinstance(self._opts[key], bool)
+            and isfinite(self._opts[key]) and 0 <= self._opts[key] <= bound
+            for key, bound in ((CONF_MIN_ON_DURATION_MIN, 240),
+                               (CONF_MIN_OFF_DURATION_MIN, 240),
+                               (CONF_COOLDOWN_DURATION_MIN, 60))
         )
-
-        # 2. (prop_algorithm is already the _PropAlgoProxy set in init_algorithm;
-        #     do NOT replace it with self._controller here — that would re-enable
-        #     the spurious recalculate() → controller.calculate() double-call.)
-
-        # 3. Forward result to the cycle scheduler.
-        # Force immediate application on any real state transition so the stove
-        # reacts without waiting for the current cycle to finish naturally:
-        #   • ON→OFF : stove stops right away (e.g. above_off_threshold)
-        #   • OFF→ON : stove restarts right away (e.g. cooldown period elapsed)
-        transition_off = was_heating and not self._controller.is_heating
-        transition_on = not was_heating and self._controller.is_heating
-        if transition_off:
-            _LOGGER.info(
-                "%s - ON→OFF transition detected (reason=%s): forcing immediate cycle stop",
-                self._thermostat.name,
-                self._controller.last_reason,
-            )
-        elif transition_on:
-            _LOGGER.info(
-                "%s - OFF→ON transition detected (reason=%s): forcing immediate cycle start",
-                self._thermostat.name,
-                self._controller.last_reason,
-            )
-        else:
-            _LOGGER.debug(
-                "%s - control_heating: no ON/OFF transition (is_heating=%s)",
-                self._thermostat.name,
-                self._controller.is_heating,
-            )
-        # Pellet stoves are always 0 % or 100 % — no periodic cycling is
-        # needed.  A single command is sent only on actual state transitions,
-        # then the cycle is cancelled immediately to prevent the scheduler's
-        # _on_master_cycle_end auto-restart from resending turn_off (F0000)
-        # commands during hardware cooldown (which would reset the cooldown
-        # timer indefinitely).
-        #
-        # NOTE: force=True is intentionally NOT included here.  For a binary
-        # stove, "force" means "recompute now" — which is already done above
-        # by calling controller.calculate().  If the result is still "stay
-        # off" (e.g. locked_off guard), sending start_cycle(on_percent=0)
-        # would issue a spurious F0000 that prevents ignition.
-        #
-        # IMPORTANT: when hvac_mode=off, VTherm already sends set_hvac_mode=off
-        # directly to the underlying entity (climate.duepi_evo), which triggers
-        # a first F0000 via the duepi_evo integration.  Calling start_cycle at
-        # the same time would trigger a second F0000 through the cycle scheduler
-        # on the same TCP connection, causing a "No ACK" race condition error.
-        # We therefore skip start_cycle when hvac_mode=off; any leftover cycle
-        # is still cancelled via the elif branch below.
-        is_hvac_off = str(hvac_mode).lower() == HVAC_MODE_OFF
-        should_send_command = (transition_off or transition_on) and not is_hvac_off
-        if self._scheduler is not None:
-            if should_send_command:
-                _LOGGER.debug(
-                    "%s - control_heating: sending stove command "
-                    "(transition_off=%s transition_on=%s)",
-                    self._thermostat.name,
-                    transition_off,
-                    transition_on,
-                )
-                await self._scheduler.start_cycle(hvac_mode, on_percent, True)
+        previous_pending = state.pending
+        command = self._controller.calculate_observed(
+            target=self._thermostat.target_temperature,
+            current=self._thermostat.current_temperature,
+            hvac_mode=hvac_mode, now=now,
+            slope=self._thermostat.last_temperature_slope,
+            allow_turn_on=durations_valid and state.available and state.observed_cycle == "OFF",
+        )
+        if self._target_error is None and command is not None and self._scheduler is not None:
+            state.pending = command
+            try:
+                if (command == "OFF" and state.off_priority and not state.is_heating
+                    and (previous_pending == "ON" or not state.available)):
+                    underlyings = self._thermostat.underlyings
+                    if len(underlyings) != 1:
+                        raise HomeAssistantError("Priority OFF command path is unavailable")
+                    await underlyings[0].turn_off()
+                elif str(hvac_mode).lower() != HVAC_MODE_OFF:
+                    await self._scheduler.start_cycle(hvac_mode, self._controller.on_percent, True)
+            except (HomeAssistantError, OSError, ValueError, RuntimeError) as err:
+                state.command_error = str(err)
+                _LOGGER.exception("%s - pellet command failed", self._thermostat.name)
+            finally:
                 await self._scheduler.cancel_cycle()
-            elif self._scheduler.is_cycle_running:
-                _LOGGER.debug(
-                    "%s - control_heating: cancelling leftover cycle (stable state)",
-                    self._thermostat.name,
-                )
-                await self._scheduler.cancel_cycle()
-            else:
-                _LOGGER.debug(
-                    "%s - control_heating: stable state, no command needed",
-                    self._thermostat.name,
-                )
-        else:
-            _LOGGER.debug(
-                "%s - control_heating: scheduler not yet available",
-                self._thermostat.name,
-            )
+        elif self._scheduler is not None and self._scheduler.is_cycle_running:
+            await self._scheduler.cancel_cycle()
 
         # 3b. Energy accounting: credit one cycle-worth of energy every
         # cycle_min minutes while the stove is heating, replacing the
         # _on_master_cycle_end callback (which no longer fires because the
         # cycle is cancelled immediately above).
-        if self._controller.is_heating:
+        if state.available and self._controller.is_heating:
             cycle_duration_sec = (self._thermostat.cycle_min or 5) * 60
             if self._last_energy_at is None:
                 self._last_energy_at = now
@@ -663,7 +631,8 @@ class PelletRegulationHandler:
             self._last_energy_at = None
 
         # 4. Apply power level on the underlying climate entity (optional).
-        if self._opts.get(CONF_POWER_CONTROL_ENABLED) and self._controller.is_heating:
+        if (not self._opts[CONF_DRY_CONTACT] and state.available and state.pending != "OFF"
+            and self._opts.get(CONF_POWER_CONTROL_ENABLED) and self._controller.is_heating):
             _LOGGER.debug(
                 "%s - control_heating: power control active while heating, applying level",
                 self._thermostat.name,
@@ -683,50 +652,87 @@ class PelletRegulationHandler:
         _LOGGER.debug(
             "%s - control_heating: on_percent=%.1f reason=%s hvac_mode=%s",
             self._thermostat.name,
-            on_percent,
+            self._controller.on_percent,
             self._controller.last_reason,
             hvac_mode,
         )
 
     def _physical_heating_state(self) -> bool | None:
-        """Return a Duepi burner observation; None means it is not trustworthy."""
-        underlying_list = self._thermostat.entry_infos.get(_CONF_UNDERLYING_LIST) or []
-        climate_entities = [
-            entity_id for entity_id in underlying_list if entity_id.startswith("climate.")
-        ]
-        if not climate_entities:
+        """Return the observed family without asserting physical heat."""
+        try:
+            entity_id = validate_target(self._thermostat.entry_infos, self._opts)
+        except ValueError:
             return None
+        cycle, _phase = observe_target(
+            self._thermostat.hass.states.get(entity_id), self._opts[CONF_DRY_CONTACT]
+        )
+        return None if cycle is None else cycle == "ON"
 
-        observations: set[bool] = set()
-        for entity_id in climate_entities:
-            state = self._thermostat.hass.states.get(entity_id)
-            if state is None or state.state in ("unknown", "unavailable"):
-                return None
-            burner_status = state.attributes.get("burner_status")
-            hvac_mode = str(state.state).lower()
-            hvac_action = state.attributes.get("hvac_action")
-            hvac_action = str(hvac_action).lower() if hvac_action is not None else None
-            if burner_status == "Flame On":
-                if hvac_mode != "heat" or hvac_action not in (None, "heating"):
-                    return None
-                observations.add(True)
-            elif burner_status in {
-                "Off",
-                "Eco idle",
-                "Eco Idle",
-                "Cooling down",
-            }:
-                expected_mode = "off" if burner_status == "Off" else "heat"
-                expected_actions = (
-                    (None, "off") if burner_status == "Off" else (None, "idle")
-                )
-                if hvac_mode != expected_mode or hvac_action not in expected_actions:
-                    return None
-                observations.add(False)
-            else:
-                return None
+    def _target_identity(self) -> dict:
+        return {"entities": list(self._thermostat.entry_infos.get(_CONF_UNDERLYING_LIST) or []),
+                "dry_contact": self._opts[CONF_DRY_CONTACT]}
 
-        return observations.pop() if len(observations) == 1 else None
+    def _observe_underlying(self) -> None:
+        if self._controller is None:
+            return
+        identity = self._target_identity()
+        if identity != self._bound_target:
+            self._controller.reset()
+            self._controller.state.resume_reason = "invalid"
+            self._last_applied_level_index = None
+            self._last_energy_at = None
+            self._bound_target = identity
+        try:
+            entity_id = validate_target(self._thermostat.entry_infos, self._opts)
+        except ValueError as err:
+            self._target_error = str(err)
+            self._controller.state.observe(None, None, monotonic())
+            return
+        self._target_error = None
+        on_state, off_state = "on", "off"
+        underlyings = self._thermostat.underlyings
+        if self._opts[CONF_DRY_CONTACT] and len(underlyings) == 1:
+            try:
+                on_state = underlyings[0].build_command(use_on=True)[2]
+                off_state = underlyings[0].build_command(use_on=False)[2]
+                if {on_state, off_state} != {"on", "off"}:
+                    raise ValueError("invalid_command_state_contract")
+            except (TypeError, ValueError, IndexError) as err:
+                self._target_error = str(err)
+                self._controller.state.observe(None, None, monotonic())
+                return
+        cycle, phase = observe_target(
+            self._thermostat.hass.states.get(entity_id), self._opts[CONF_DRY_CONTACT],
+            on_state=on_state, off_state=off_state,
+        )
+        self._controller.state.observe(cycle, phase, monotonic())
+
+    async def _async_observation_changed(self, _event: Any) -> None:
+        await self.control_heating()
+
+    async def _async_shutdown(self, _event: Any) -> None:
+        async with self._control_lock:
+            self._stopping = True
+            self._observe_underlying()
+            await self._save_cycle()
+
+    async def _save_cycle(self) -> None:
+        if self._store is None or self._controller is None:
+            return
+        snapshot = self._cache_cycle()
+        try:
+            async with self._storage_lock:
+                await self._store.async_save(snapshot)
+        except (HomeAssistantError, OSError, ValueError) as err:
+            self._storage_error = str(err)
+            _LOGGER.exception("%s - cycle persistence failed", self._thermostat.name)
+
+    def _cache_cycle(self) -> dict:
+        snapshot = {**self._controller.save_state(), "target": self._target_identity()}
+        self._thermostat.hass.data.setdefault(DOMAIN, {}).setdefault(
+            "cycle_snapshots", {}
+        )[self._thermostat.unique_id] = deepcopy(snapshot)
+        return snapshot
 
     async def _publish_current_state(self, now: datetime) -> None:
         """Publish and persist the current controller snapshot."""
@@ -734,10 +740,15 @@ class PelletRegulationHandler:
             return
         self._thermostat.update_custom_attributes()
         self._thermostat.async_write_ha_state()
-        if self._store is not None:
-            await self._store.async_save(self._controller.save_state())
+        await self._save_cycle()
         if self._debug_sensor is not None:
-            self._debug_sensor.update_from_controller(self._controller, now)
+            self._debug_sensor.update_from_controller(
+                self._controller, now, diagnostics={
+                    "dry_contact": self._opts[CONF_DRY_CONTACT],
+                    "target_error": self._target_error,
+                    "storage_error": self._storage_error,
+                },
+            )
 
     async def on_state_changed(self, changed: bool = True) -> None:
         """React to a thermostat state change."""

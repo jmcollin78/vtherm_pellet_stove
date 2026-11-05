@@ -92,6 +92,8 @@ class CycleGuard:
             ``True`` si l'extinction est autorisée (durée min atteinte ou
             jamais allumé), ``False`` si le poêle doit continuer à chauffer.
         """
+        if state.observed_cycle is not None:
+            return state.elapsed_on_sec >= 60 * self._min_on_duration_min
         if state.last_on_at is None:
             return True
         elapsed_min = _elapsed_minutes(state.last_on_at, now)
@@ -114,6 +116,10 @@ class CycleGuard:
             atteints ou jamais éteint), ``False`` si le poêle doit rester
             éteint.
         """
+        if state.observed_cycle is not None:
+            return state.elapsed_off_sec >= 60 * (
+                self._min_off_duration_min + self._cooldown_duration_min
+            )
         if state.last_off_at is None:
             return True
         elapsed_min = _elapsed_minutes(state.last_off_at, now)
@@ -129,6 +135,9 @@ class CycleGuard:
 
         Retourne 0 si déjà autorisé.
         """
+        if state.observed_cycle is not None:
+            return max(0.0, 60 * (self._min_off_duration_min + self._cooldown_duration_min)
+                       - state.elapsed_off_sec)
         if state.last_off_at is None:
             return 0.0
         elapsed_min = _elapsed_minutes(state.last_off_at, now)
@@ -141,6 +150,8 @@ class CycleGuard:
 
         Retourne 0 si déjà autorisé.
         """
+        if state.observed_cycle is not None:
+            return max(0.0, 60 * self._min_on_duration_min - state.elapsed_on_sec)
         if state.last_on_at is None:
             return 0.0
         elapsed_min = _elapsed_minutes(state.last_on_at, now)

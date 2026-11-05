@@ -14,7 +14,7 @@
     "documentation": "https://github.com/jmcollin78/vtherm_pellet_stove",
     "issue_tracker": "https://github.com/jmcollin78/vtherm_pellet_stove/issues",
     "requirements": [
-        "vtherm_api>=0.7.0"
+        "vtherm_api>=0.8.0"
     ],
-    "version": "1.0.1"
+    "version": "2.0.0"
 }

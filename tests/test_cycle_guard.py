@@ -111,3 +111,64 @@ def test_seconds_until_can_turn_off_returns_remaining(guard: CycleGuard) -> None
     state = PelletState(last_on_at=_now() - timedelta(minutes=15))
     # 30 min requis − 15 min écoulées = 15 min restantes = 900 secondes
     assert guard.seconds_until_can_turn_off(_now(), state) == pytest.approx(900.0)
+
+
+def test_observed_cycle_resumes_without_interruption_time() -> None:
+    state = PelletState()
+    state.observe("ON", "Flame On", 100.0)
+    state.observe("ON", "Flame On", 1300.0)
+    restored = PelletState()
+    restored.restore_state(state.save_state())
+    restored.observe("ON", "Flame On", 10000.0)
+    assert restored.elapsed_on_sec == 1200.0
+    restored.observe("ON", "Flame On", 10600.0)
+    assert restored.elapsed_on_sec == 1800.0
+
+
+def test_observed_guard_uses_active_time_not_wall_clock() -> None:
+    cycle_guard = CycleGuard(min_on_duration_min=30, min_off_duration_min=20,
+                             cooldown_duration_min=5)
+    state = PelletState(last_on_at=_now() - timedelta(days=10))
+    state.observe("ON", "Flame On", 0.0)
+    state.observe("ON", "Flame On", 1200.0)
+    assert not cycle_guard.can_turn_off(_now(), state)
+    assert cycle_guard.seconds_until_can_turn_off(_now(), state) == 600.0
+    state.observe("ON", "Flame On", 1800.0)
+    assert cycle_guard.can_turn_off(_now(), state)
+
+
+@pytest.mark.parametrize("phase", ["Cleaning", "Eco idle"])
+def test_observation_acknowledges_off_and_preserves_phase_progression(phase) -> None:
+    state = PelletState()
+    state.observe("ON", "Flame On", 0.0)
+    state.pending = "OFF"
+    state.command_error = "service failed"
+    state.observe("ON", "Flame On", 30.0)
+    assert state.pending == "OFF"
+    state.observe("OFF", phase, 60.0)
+    assert state.pending is None
+    assert state.elapsed_off_sec == 0.0
+    state.observe("OFF", phase, 120.0)
+    state.observe("OFF", "Cooling down", 180.0)
+    assert state.elapsed_cooldown_sec == 120.0
+    assert state.command_error == "service failed"
+
+
+def test_unavailability_freezes_counters_and_divergence_resets() -> None:
+    state = PelletState()
+    state.observe("OFF", "off", 0.0)
+    state.observe(None, "unavailable", 60.0)
+    state.observe("OFF", "off", 10000.0)
+    assert state.elapsed_off_sec == 60.0
+    state.observe("ON", "on", 10030.0)
+    assert state.elapsed_on_sec == state.elapsed_off_sec == 0.0
+
+
+@pytest.mark.parametrize("counter", [-1, float("nan"), float("inf"), "20", True])
+def test_invalid_saved_counter_is_not_resumed(counter) -> None:
+    state = PelletState()
+    state.restore_state({"cycle_version": 1, "observed_cycle": "ON",
+                         "elapsed_on_sec": counter, "elapsed_off_sec": 0})
+    state.observe("ON", "on", 100.0)
+    assert state.elapsed_on_sec == 0.0
+    assert state.resume_reason == "invalid"
