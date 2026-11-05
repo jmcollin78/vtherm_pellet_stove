@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Explicit local dry-contact mode for one bistable switch, with English/French warning and confirmation in creation, Options and Reconfigure (#9).
+- Shared observed-cycle reconciliation, persisted active-time counters, indefinite availability monitoring and observed command acknowledgements for switch and climate targets.
+- Separate pending commands and explicit errors without periodic retries; priority OFF handling and extended diagnostics.
+- Hidden and inactive dry-contact power/boost controls with their stored values preserved.
+
+### Changed
+
+- Require exactly one underlying in both modes. Restore matching active counters without crediting downtime; adopt divergent or unsaved observations with zero counters.
+- Recognize Duepi ignition, heating and non-heating phases, including immediate OFF acknowledgement by Cleaning and Eco idle.
+
+### Validation Limits
+
+- Simulated automated tests do not certify stove behavior or deployed HA/VTherm/Duepi combinations. VTherm initialization, keep-alive, repair and absorbed-error paths still require deployment qualification.
+
 ## [1.0.0] — 2026-10-22
 
 ### Added
