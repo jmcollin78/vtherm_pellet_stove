@@ -235,59 +235,47 @@ class TestIssue9ObservedCycles:
         assert handler._controller.state.elapsed_off_sec == 0
         scheduler.start_cycle.assert_awaited_once_with("heat", 0.0, True)
 
-    @pytest.mark.parametrize("service_error", [False, True])
-    async def test_real_vtherm_scheduler_submits_services_once(self, hass, monkeypatch, service_error):
-        import sys
-        from importlib import import_module
-        from importlib.metadata import distribution
-
-        monkeypatch.setattr(sys.modules["vtherm_api"], "__path__", [str(
-            distribution("vtherm-api").locate_file("vtherm_api")
-        )], raising=False)
-        scheduler_module = import_module("custom_components.versatile_thermostat.cycle_scheduler")
-        handler, thermostat, _scheduler, entity_id = _observed_handler(options={
-            CONF_MIN_ON_DURATION_MIN: 0, CONF_MIN_OFF_DURATION_MIN: 0,
-            CONF_COOLDOWN_DURATION_MIN: 0,
-        })
-        thermostat.hass = hass
-        hass.states.async_set(entity_id, "off")
-        submitted = []
-
-        async def service(call):
-            submitted.append((call.service, call.data["entity_id"]))
-            if service_error and call.service == "turn_on":
-                raise HomeAssistantError("service rejected ON")
-
-        for command in ("turn_on", "turn_off"):
-            hass.services.async_register("switch", command, service)
-
-        async def turn_on():
-            await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
-
-        async def turn_off():
-            await hass.services.async_call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
-
+    @pytest.mark.parametrize("scheduler_error", [False, True])
+    async def test_scheduler_commands_are_submitted_once(self, scheduler_error):
+        handler, thermostat, scheduler, _entity_id = _observed_handler(
+            options={
+                CONF_MIN_ON_DURATION_MIN: 0,
+                CONF_MIN_OFF_DURATION_MIN: 0,
+                CONF_COOLDOWN_DURATION_MIN: 0,
+            }
+        )
         underlying = SimpleNamespace(
-            entity_id=entity_id, is_device_active=False, turn_on=turn_on, turn_off=turn_off,
-            build_command=lambda use_on: ("turn_on" if use_on else "turn_off", {},
-                                          "on" if use_on else "off"),
+            turn_off=AsyncMock(),
+            is_device_active=False,
+            build_command=lambda use_on: (
+                "turn_on" if use_on else "turn_off",
+                {},
+                "on" if use_on else "off",
+            ),
         )
         thermostat.underlyings = [underlying]
-        with patch.object(scheduler_module.CycleScheduler, "_detect_valve_mode", return_value=False):
-            scheduler = scheduler_module.CycleScheduler(hass, thermostat, [underlying], 300)
-        handler.on_scheduler_ready(scheduler)
-        with patch.object(scheduler_module, "async_call_later", return_value=MagicMock()):
-            await handler.control_heating()
-            await handler.control_heating()
-            assert submitted == [("turn_on", entity_id)]
-            assert not scheduler.is_cycle_running
-            assert handler._controller.state.pending == "ON"
-            assert handler._controller.state.observed_cycle == "OFF"
-            if service_error:
-                assert handler._controller.state.command_error == "service rejected ON"
-            thermostat.current_temperature = 27
-            await handler.control_heating()
-        assert submitted == [("turn_on", entity_id), ("turn_off", entity_id)]
+        if scheduler_error:
+            scheduler.start_cycle.side_effect = [
+                HomeAssistantError("scheduler rejected ON"),
+                None,
+            ]
+
+        await handler.control_heating()
+        await handler.control_heating()
+        assert scheduler.start_cycle.await_count == 1
+        assert scheduler.start_cycle.await_args.args == ("heat", 1.0, True)
+        assert handler._controller.state.pending == "ON"
+        assert handler._controller.state.observed_cycle == "OFF"
+        if scheduler_error:
+            assert handler._controller.state.command_error == "scheduler rejected ON"
+        else:
+            assert handler._controller.state.command_error is None
+
+        thermostat.current_temperature = 27
+        await handler.control_heating()
+        scheduler.start_cycle.assert_awaited_once_with("heat", 1.0, True)
+        assert scheduler.cancel_cycle.await_count == 2
+        underlying.turn_off.assert_awaited_once()
         assert handler._controller.state.pending == "OFF"
 
     async def test_reload_resumes_final_counters_before_scheduled_save(self):
