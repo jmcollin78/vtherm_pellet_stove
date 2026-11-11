@@ -16,7 +16,7 @@
     - [Step 1 — Install Versatile Thermostat](#step-1--install-versatile-thermostat)
     - [Step 2 — Install vtherm\_pellet\_stove and create the global defaults](#step-2--install-vtherm_pellet_stove-and-create-the-global-defaults)
     - [Step 3 — Create the VTherm of type over\_switch](#step-3--create-the-vtherm-of-type-over_switch)
-    - [Step 4 — Add the custom ON/OFF commands](#step-4--add-the-custom-onoff-commands)
+    - [Step 4 — Configure climate underlying commands](#step-4--configure-climate-underlying-commands)
     - [Step 5 — Link vtherm\_pellet\_stove to the VTherm](#step-5--link-vtherm_pellet_stove-to-the-vtherm)
   - [3. How it works](#3-how-it-works)
   - [4. Configuring Versatile Thermostat](#4-configuring-versatile-thermostat)
@@ -50,7 +50,7 @@
 | [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0            |
 | HACS                                                                       | 1.34            |
 
-Your pellet stove **must already be exposed as a `climate` entity** in Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, or any other integration). This plugin does **not** communicate directly with stoves.
+The stove may be controlled through a `climate` entity (Duepi EVO, ESPHome, MCZ, EdilKamin, …) or a native dry-contact `switch` in VTherm `over_switch` mode. The plugin never communicates directly with the stove; its target remains the VTherm `climate` entity.
 
 ---
 
@@ -100,15 +100,15 @@ Refer to the [Versatile Thermostat documentation](https://github.com/jmcollin78/
 
 1. Go to **Settings → Devices & Services → Versatile Thermostat → Add**.
 2. Choose thermostat type **`over_switch`**.
-3. In the **Underlying entity** field, select the `climate` entity that controls your pellet stove (e.g. `climate.duepi_evo`).
+3. In the **Underlying entity** field, select either the stove's `climate` entity (e.g. `climate.duepi_evo`) or the native dry-contact `switch`.
 4. In the **Proportional function** (algorithm) field, select **`pellet_regulation`**.
 5. Set the cycle duration (`cycle_min`) to `60` minutes.
 6. Set **Minimal activation delay** to `1800` s (30 min) and **Minimal deactivation delay** to `1500` s (25 min) — these should align with `min_on_duration_min` and `min_off_duration_min + cooldown_duration_min`.
 7. Complete the remaining VTherm settings (name, temperature sensor, etc.) and save.
 
-### Step 4 — Add the custom ON/OFF commands
+### Step 4 — Configure climate underlying commands
 
-VTherm's `over_switch` mode sends two configurable service calls to the stove. These must be set on the **underlying entity** configuration page of the VTherm you just created:
+This step applies only to a `climate` underlying. On the **underlying entity** configuration page of the VTherm you just created:
 
 1. Open the VTherm entity → **Options** → **Underlying entities** page.
 2. In the **Switch ON command** (`vswitch_on`) field, enter:
@@ -119,9 +119,9 @@ VTherm's `over_switch` mode sends two configurable service calls to the stove. T
    ```
    set_hvac_mode/hvac_mode:off
    ```
-4. Save. VTherm will now call `climate.set_hvac_mode(hvac_mode=heat)` to ignite the stove and `climate.set_hvac_mode(hvac_mode=off)` to extinguish it.
+4. Save. VTherm will call `climate.set_hvac_mode(hvac_mode=heat/off)` to request stove operation.
 
-> **Why these commands?** Pellet stoves are exposed as `climate` entities, not `switch` entities. The `vswitch_on/off` syntax lets VTherm call any HA service in the format `service_name/key:value`.
+For a `switch` underlying, VTherm uses its native switch control: do not enter `set_hvac_mode` commands or create an intermediate climate entity.
 
 ### Step 5 — Link vtherm_pellet_stove to the VTherm
 
@@ -140,6 +140,8 @@ If the global default parameters suit this stove, no additional step is required
 
 > Per-thermostat values always take precedence over the global defaults. You can have one entry per stove.
 
+The per-thermostat entry targets the VTherm `climate`, even when it controls a `switch`. The underlying type is detected automatically; setup, Options and reconfiguration forms show the dry-contact warning alongside the three duration fields. No manual switch/climate selection is required.
+
 ---
 
 ## 3. How it works
@@ -148,8 +150,8 @@ If the global default parameters suit this stove, no additional step is required
 
 1. **Calculates `on_percent`** — a binary 0 or 1 value derived from a parameterizable hysteresis on the room temperature.
 2. **Applies pellet-specific guard-rails** — minimum on/off durations and a cooldown delay to prevent excessive ignition cycles.
-3. **Sends ON/OFF commands** — VTherm's cycle scheduler translates `on_percent` into `set_hvac_mode` calls on the stove's `climate` entity (via `vswitch_on` / `vswitch_off`).
-4. **Optionally adjusts the power level** — the plugin calls `set_fan_mode` or `set_preset_mode` on the stove according to the temperature gap (ΔT) and slope.
+3. **Requests ON/OFF through VTherm** — climate transitions use `vswitch_on/off`; an underlying switch uses VTherm's native switch path. Stable control states do not repeat commands.
+4. **Optionally adjusts the power level** — for a climate underlying, the plugin calls `set_fan_mode` or `set_preset_mode` according to temperature gap (ΔT) and slope.
 
 ```
 Room too cold                         Room at setpoint
@@ -160,6 +162,10 @@ current ≤ target − hysteresis_on      |
                                            set_hvac_mode(heat)
 ```
 
+With a dry contact, ON/OFF is only a request: flame and successful shutdown are not observed. At startup, a known contact state is adopted without creating a transition timestamp. Usable timestamps are preserved and Home Assistant downtime counts; without a relevant timestamp, no artificial initial delay is imposed. No Recorder history is read. Users must account for operations before Home Assistant started.
+
+**VTherm compatibility:** do not enable this path with VTherm 10.6.4, whose automatic repair can reverse passive adoption of an ON contact in `heat` mode. Wait for a version implementing the contract tracked by [issue #2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223), and validate that version before use.
+
 ---
 
 ## 4. Configuring Versatile Thermostat
@@ -169,15 +175,16 @@ Create a VTherm in **`over_switch`** mode and set the following options:
 | VTherm option                    | Value                                                                                   |
 | -------------------------------- | --------------------------------------------------------------------------------------- |
 | **Thermostat type**              | `over_switch`                                                                           |
-| **Underlying entity**            | `climate.<your_stove>` (e.g. `climate.duepi_evo`)                                       |
+| **Underlying entity**            | `climate.<your_stove>` or `switch.<dry_contact>`                                       |
 | **Proportional function**        | `pellet_regulation`                                                                     |
-| **`vswitch_on` command**         | `set_hvac_mode/hvac_mode:heat`                                                          |
-| **`vswitch_off` command**        | `set_hvac_mode/hvac_mode:off`                                                           |
+| **Custom commands**              | `vswitch_on/off` with `set_hvac_mode` only for a climate underlying                      |
 | **Cycle duration** (`cycle_min`) | 60 (minutes) — the cycle scheduler runs every hour                                      |
 | **Minimal activation delay**     | 1800 (seconds, i.e. 30 min) — must match `min_on_duration_min`                          |
 | **Minimal deactivation delay**   | 1500 (seconds, i.e. 25 min) — must match `min_off_duration_min + cooldown_duration_min` |
 
 > **Why `over_switch`?** VTherm's `over_switch` mode exposes the `InterfacePropAlgorithmFactory` extension point that allows external plugins to register custom regulation algorithms. The `vswitch_on/off` options let you target any HA domain, including `climate`.
+
+Pellet Stove configuration always selects the VTherm `climate`. For a dry contact, set `min_on_duration_min` to cover ignition and useful heating; `min_off_duration_min` plus `cooldown_duration_min` must cover shutdown and rest. The switch provides no physical feedback. Without a usable persisted timestamp, the initial delay is considered satisfied; users are responsible for the actual stove state and prior operations.
 
 ---
 
@@ -219,9 +226,9 @@ Both the global entry and per-thermostat entries expose an **Options** button th
 
 | Parameter               | Default   | Description                                                                                       |
 | ----------------------- | --------- | ------------------------------------------------------------------------------------------------- |
-| `min_on_duration_min`   | `30 min`  | Minimum burn time before an OFF is allowed. Protects the igniter.                                 |
-| `min_off_duration_min`  | `20 min`  | Minimum off time before re-ignition is allowed.                                                   |
-| `cooldown_duration_min` | `5 min`   | Extra cooldown added on top of `min_off_duration_min` after each OFF.                             |
+| `min_on_duration_min`   | `30 min`  | Minimum time between an ON request and a regulation OFF; include ignition and useful heating.     |
+| `min_off_duration_min`  | `20 min`  | Minimum off time before re-ignition; together with cooldown, cover shutdown and rest.              |
+| `cooldown_duration_min` | `5 min`   | Additional delay after OFF, added to the minimum off duration.                                    |
 | `safety_room_temp`      | `26.0 °C` | Room temperature above which the stove is **immediately forced off** (overrides all guard-rails). |
 
 ### Power level control (optional)
@@ -234,6 +241,8 @@ Both the global entry and per-thermostat entries expose an **Options** button th
 | `power_default_level_index` | `2`                     | Default index when the temperature slope is unknown.                     |
 | `power_boost_enabled`       | `true`                  | Enable a temporary boost to maximum after a setpoint increase.           |
 | `power_boost_duration_min`  | `15 min`                | Duration of the boost phase.                                             |
+
+Power control and boost apply only to a `climate` underlying. For a dry-contact `switch`, they are automatically inhibited at runtime without changing the configured settings. Diagnostics describe the regulator's software state, not measured power, flame or successful shutdown.
 
 ---
 

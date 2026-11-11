@@ -212,10 +212,49 @@ class PelletRegulationController:
         )
         return decision.on_percent
 
-    def restore_state(self, data: dict | None) -> None:
+    def restore_state(
+        self,
+        data: dict | None,
+        *,
+        tolerate_invalid_dates: bool = False,
+        now: datetime | None = None,
+    ) -> None:
         """Restaure l'état depuis les données du Store HA."""
         if data:
-            self._state.restore_state(data)
+            self._state.restore_state(
+                data,
+                tolerate_invalid_dates=tolerate_invalid_dates,
+                now=now,
+            )
+
+    def adopt_switch_state(
+        self, is_heating: bool, *, now: datetime | None = None
+    ) -> None:
+        """Adopt a known contact state without recording a transition."""
+        reason = "switch_state_adopted"
+        reference = now or datetime.now(timezone.utc)
+        if self._state.last_on_at is not None and self._state.last_on_at > reference:
+            self._state.last_on_at = None
+        if self._state.last_off_at is not None and self._state.last_off_at > reference:
+            self._state.last_off_at = None
+        if is_heating and (
+            self._state.last_on_at is not None
+            and self._state.last_off_at is not None
+            and self._state.last_on_at < self._state.last_off_at
+        ):
+            self._state.last_on_at = None
+        elif not is_heating and (
+            self._state.last_off_at is not None
+            and self._state.last_on_at is not None
+            and self._state.last_off_at < self._state.last_on_at
+        ):
+            self._state.last_off_at = None
+        self._state.is_heating = is_heating
+        self._state.last_reason = reason
+        self._last_decision = PelletDecision(
+            on_percent=(self._max_on_percent if is_heating else self._min_on_percent),
+            reason=reason,
+        )
 
     def save_state(self) -> dict:
         """Sérialise l'état pour le Store HA."""

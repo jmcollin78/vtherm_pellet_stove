@@ -20,16 +20,18 @@
 
 ## Qu'est-ce que vtherm_pellet_stove ?
 
-`vtherm_pellet_stove` enregistre un nouvel algorithme proportionnel nommé **`pellet_regulation`** dans l'API publique de [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm). Il étend les thermostats VTherm configurés en mode `over_switch` ciblant une entité `climate` (ex. Duepi EVO, poêle ESPHome, MCZ, EdilKamin, …).
+`vtherm_pellet_stove` enregistre un nouvel algorithme proportionnel nommé **`pellet_regulation`** dans l'API publique de [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm). Il étend les thermostats VTherm configurés en mode `over_switch`, avec un poêle `climate` ou un relais natif `switch`. La configuration du plugin cible toujours l'entité `climate` du VTherm.
 
 Fonctionnalités principales :
 
 - **Hystérésis paramétrable** — seuils `hysteresis_on` / `hysteresis_off` configurables.
 - **Protection anti-court-cycle** — durées minimales de marche/arrêt et délai de refroidissement pour protéger la bougie.
 - **Coupure de sécurité** — force l'extinction si la température ambiante dépasse un seuil configurable.
-- **Pilotage optionnel du niveau de puissance** — ajuste `fan_mode` ou `preset_mode` du poêle en fonction de ΔT et de la pente de température.
+- **Pilotage optionnel du niveau de puissance** — ajuste `fan_mode` ou `preset_mode` du poêle en fonction de ΔT et de la pente de température, uniquement avec un sous-jacent climate.
 - **Boost** — hausse temporaire au niveau maximal après une augmentation de consigne.
+- **Contact sec** — puissance et boost sont automatiquement neutralisés, sans effacer les réglages; ils reprennent effet si le sous-jacent redevient climate.
 - **État persistant** — survit aux redémarrages de Home Assistant.
+- **Contact sec** — détection automatique du sous-jacent `switch`; ON/OFF reste une demande, sans retour sur la flamme ou l'extinction réelle.
 - **Compatible HACS** — entrée de defaults globaux + surcharges par thermostat.
 
 ## Intégration avec Versatile Thermostat
@@ -37,9 +39,15 @@ Fonctionnalités principales :
 Le plugin utilise l'API publique [vtherm_api](https://github.com/KipK/vtherm_api). Une fois installé :
 
 1. Configurer Versatile Thermostat en mode **`over_switch`**.
-2. Définir l'entité sous-jacente comme l'entité `climate.*` du poêle.
-3. Configurer `vswitch_on = "set_hvac_mode/hvac_mode:heat"` et `vswitch_off = "set_hvac_mode/hvac_mode:off"`.
+2. Choisir comme sous-jacent l'entité `climate.*` du poêle ou le `switch.*` natif du contact sec.
+3. Pour un sous-jacent climate, configurer `vswitch_on = "set_hvac_mode/hvac_mode:heat"` et `vswitch_off = "set_hvac_mode/hvac_mode:off"`. Pour un switch, utiliser le pilotage natif de VTherm, sans climate intermédiaire.
 4. Sélectionner **`pellet_regulation`** comme fonction proportionnelle.
+
+La configuration de ce plugin sélectionne le `climate` VTherm, jamais le relais. Le type du sous-jacent est détecté automatiquement; les formulaires de création, d'Options et de reconfiguration affichent l'avertissement contact sec et les trois durées à régler.
+
+Pour un contact sec, `min_on_duration_min` doit couvrir l'allumage et la chauffe utile; `min_off_duration_min` plus `cooldown_duration_min` doivent couvrir l'extinction et le repos. Sans date persistée exploitable, aucune attente initiale artificielle n'est appliquée : l'utilisateur doit tenir compte des manoeuvres effectuées avant le démarrage de HA. Ces durées sont des garde-fous logiciels, pas une garantie de sécurité matérielle.
+
+**Compatibilité VTherm :** ne pas activer ce parcours avec VTherm 10.6.4. Sa réparation automatique peut inverser l'adoption passive d'un contact ON. Attendre une version intégrant le contrat suivi par [l'issue #2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223) et vérifier cette version avant usage.
 
 ## Installation
 

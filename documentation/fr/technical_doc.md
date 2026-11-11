@@ -26,7 +26,7 @@
 
 `vtherm_pellet_stove` est une **intégration HA distribuable via HACS** qui s'enregistre comme algorithme proportionnel externe (`pellet_regulation`) dans l'interface publique [vtherm_api](https://github.com/KipK/vtherm_api).
 
-Il est conçu exclusivement pour les thermostats VTherm en mode `over_switch` ciblant une entité `climate` (le poêle à pellets). Le cycle scheduler intégré de VTherm gère la temporalité réelle ON/OFF ; ce plugin fournit uniquement le **calcul d'`on_percent`** et l'ajustement optionnel du niveau de puissance.
+Il est conçu pour les thermostats VTherm en mode `over_switch`; la configuration du plugin cible toujours le `climate` VTherm, dont le sous-jacent peut être l'entité `climate` du poêle ou un contact sec `switch`. Le cycle scheduler de VTherm gère les demandes ON/OFF; ce plugin calcule `on_percent` et n'ajuste la puissance que pour un sous-jacent `climate`.
 
 ```
 ┌────────────────────────────────────┐
@@ -94,12 +94,12 @@ Adaptateur au cycle de vie HA. Implémente `InterfacePropAlgorithmHandler` :
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `init_algorithm`      | Résoudre les options effectives (`_resolve_options`), construire `PelletRegulationController`, créer le `Store`.                                                                                                                                                                |
 | `async_added_to_hass` | Charger l'état persistant depuis le `Store`, appeler `controller.restore_state`.                                                                                                                                                                                                |
-| `async_startup`       | Déclencher `on_state_changed(True)` → première itération `control_heating`.                                                                                                                                                                                                     |
+| `async_startup`       | Pour un switch, adopter son premier état connu sans dater de transition; attendre s'il est inconnu. Pour le parcours climate, déclencher `on_state_changed(True)` comme avant.                                                                                                      |
 | `remove`              | Planifier `store.async_save` via `hass.async_create_task`.                                                                                                                                                                                                                      |
-| `control_heating`     | Appeler `controller.calculate`, détecter les transitions réelles d'état (ON↔OFF), mettre à jour `thermostat.prop_algorithm`, appeler `scheduler.start_cycle` avec `force=True` lors de toute transition réelle, appliquer le niveau de puissance, publier l'état HA, persister. |
+| `control_heating`     | Appeler `controller.calculate`, détecter les transitions réelles d'état (ON↔OFF), mettre à jour `thermostat.prop_algorithm`, appeler `scheduler.start_cycle` avec `force=True` lors de toute transition réelle, appliquer le niveau uniquement pour un sous-jacent climate, publier l'état HA, persister. |
 | `on_state_changed`    | Transférer à `control_heating` si `changed=True`.                                                                                                                                                                                                                               |
 | `on_scheduler_ready`  | Stocker la référence du scheduler, enregistrer les callbacks de cycle.                                                                                                                                                                                                          |
-| `_apply_power_level`  | Appeler `climate.set_fan_mode / set_preset_mode` sur les entités climate sous-jacentes. Anti-spam : ignorer si le niveau n'a pas changé.                                                                                                                                        |
+| `_apply_power_level`  | Appeler `climate.set_fan_mode / set_preset_mode` sur les entités climate sous-jacentes; aucun appel pour un sous-jacent switch. Anti-spam : ignorer si le niveau n'a pas changé.                                                                                                   |
 
 **Résolution des options** (`_resolve_options`) :
 
@@ -108,6 +108,8 @@ DEFAULT_OPTIONS ← entrée globale (data → options) ← entrée par thermosta
 ```
 
 Le dict `options` (depuis l'OptionsFlow) a toujours la priorité sur `data` (depuis le ConfigFlow).
+
+Pour un sous-jacent `switch`, le handler dérive localement `power_control_enabled=false` et `power_boost_enabled=false` pour le contrôleur. Les options résolues et persistées ne sont pas modifiées; les fonctions reprennent si le VTherm est reconfiguré avec un sous-jacent `climate`.
 
 ### `pellet/` — logique métier
 
@@ -250,6 +252,12 @@ VTherm.async_control_heating
        └─ store.async_save(controller.save_state())
 ```
 
+### Contrat de commande d'un contact sec
+
+La configuration et l'adoption logicielle initiale du contact sont implementees. La regulation automatique complete reste conditionnee a la verification du contrat amont suivi par VTherm [#2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223) : VTherm doit initialiser une seule fois son etat attendu depuis le premier etat valide avant `check_initial_state()`. Le plugin ne lit ni ne modifie les champs prives de VTherm.
+
+Les transitions ON/OFF pilotees restent a deleguer a `scheduler.start_cycle(...)` : le `CycleScheduler` de VTherm appelle `UnderlyingSwitch.turn_on()` ou `turn_off()`. Le plugin ne doit pas appeler directement les services du switch ni doubler un OFF confie a VTherm. Avec VTherm 10.6.4, une adoption passive ON en mode `heat` peut encore etre renversee par `repair_incorrect_state`; les tests unitaires locaux ne prouvent pas le contrat amont. ON/OFF exprime une demande et n'acquitte pas l'allumage ni l'extinction physique du poele.
+
 ---
 
 ## 7. Interface de configuration
@@ -267,7 +275,7 @@ VTherm.async_control_heating
 - Une entrée locale remplace toute la configuration globale ; ses clés absentes utilisent les défauts. Sans entrée locale, l'entrée globale s'applique.
 - Options met à jour directement le handler cible (ou les handlers sans entrée locale pour une modification globale). Reconfigurer recharge l'entrée Pellet Stove, puis son setup applique les valeurs au même handler vivant.
 - L'objet d'état, ses horodatages, le proxy, le verrou et le scheduler restent sur le handler existant. Les échéances diagnostiques sont recalculées depuis les horodatages d'origine et les nouvelles durées.
-- Une transition automatique vers ON n'est permise que si chaque underlying climate expose un statut Duepi reconnu comme non-allumé (`Off`, `Eco idle` ou `Cooling down`). État absent, indisponible, inconnu, transitoire ou contradictoire bloque ON. `Flame On` bloque aussi un second ON.
+- Pour un underlying climate, une transition automatique vers ON exige un statut Duepi reconnu comme non-allumé (`Off`, `Eco idle` ou `Cooling down`); un état absent, indisponible, inconnu, transitoire ou contradictoire bloque ON, et `Flame On` bloque un second ON. Pour un switch, ON exige que l'état HA du contact soit explicitement `off`; un contact absent, indisponible, inconnu ou déjà `on` bloque l'allumage.
 - Un seuil de sécurité dépassé peut demander OFF même sans consigne. Une commande VTherm déjà en vol reste toutefois sérialisée par son verrou ; aucune garantie d'interruption ou d'ordre matériel prioritaire n'est disponible.
 - Le hook HA `async_remove_entry` désenregistre la factory après suppression réelle. `async_unload_entry` ne le fait pas, car HA l'utilise aussi pendant un reload.
 
@@ -280,6 +288,10 @@ Le format de clé du `Store` est `vtherm_pellet_stove.<slugify(vtherm_unique_id)
 - Écrit après chaque appel à `control_heating`.
 - Lu une fois dans `async_added_to_hass` et passé à `controller.restore_state`.
 - Contient tous les champs de `PelletState`, les datetimes au format ISO-8601.
+- Pour un sous-jacent switch seulement, les dates de transition sont lues de façon tolérante : les valeurs illisibles ou futures deviennent absentes, les dates naïves sont normalisées en UTC, et une date courante antérieure à l'autre transition est écartée. La restauration climate conserve son parseur historique.
+- Après la restauration du mode VTherm, `async_startup` adopte une seule fois le premier état switch valide (`on` ou `off`) sans créer de date ni envoyer de commande de restauration. Si le contact est absent, `unknown` ou `unavailable`, l'adoption est différée jusqu'au premier état connu.
+- Une date pertinente valide est conservée : `last_on_at` pour ON, `last_off_at` pour OFF. L'interruption de Home Assistant compte dans le délai. `next_action_allowed_at` reste fondé sur la date d'origine, même si l'échéance est passée; sans date pertinente valide, il vaut `null` et aucun délai initial artificiel n'est imposé.
+- L'adoption décrit uniquement l'état estimé. Elle ne confirme pas la flamme, l'extinction ni une action externe pendant l'arrêt de Home Assistant.
 
 ---
 
@@ -302,6 +314,8 @@ Anti-spam : `_apply_power_level` compare `current_level_index` avec `_last_appli
 ### Boost
 
 `BoostManager.maybe_trigger` se déclenche quand `new_target − previous_target ≥ 0,5 °C`. Il positionne `state.boost_until = now + timedelta(minutes=power_boost_duration_min)`. Tant que `boost_until > now`, `_compute_level_index` retourne le dernier index (niveau maximum).
+
+Avec un sous-jacent `switch`, ni `PowerMapper` ni `BoostManager` ne sont activés. Un niveau et une échéance de boost restaurés restent dans l'état persisté, mais aucun niveau n'est applicable et le boost n'est pas actif dans le calcul runtime; les dates de transition ON/OFF et leurs échéances de garde restent intactes.
 
 ---
 
@@ -389,7 +403,7 @@ Chaque VTherm utilisant `pellet_regulation` crée automatiquement une entité ca
 | `burning`  | `is_heating = true` ET durée ≥ `min_on_duration_min`                   |
 | `cooldown` | `is_heating = false` ET garde-fou min_off+cooldown en cours            |
 
-L'entité expose également tous les paramètres actifs (hystérésis, garde-fous, dernières décisions) en attributs, facilitant le débogage directement depuis l'interface HA.
+L'entité expose également les paramètres actifs (hystérésis, garde-fous, décisions et échéances logicielles) en attributs. Avec un contact sec, ces informations décrivent le modèle du plugin et l'état du contact dans HA; elles ne mesurent ni la puissance, ni la flamme, ni l'extinction réelle.
 
 ---
 

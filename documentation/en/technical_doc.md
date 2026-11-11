@@ -26,7 +26,7 @@
 
 `vtherm_pellet_stove` is a **HACS-distributable HA integration** that registers itself as an external proportional algorithm (`pellet_regulation`) in the [vtherm_api](https://github.com/KipK/vtherm_api) public interface.
 
-It is designed exclusively for VTherm `over_switch` thermostats targeting a `climate` entity (the pellet stove). VTherm's built-in cycle scheduler handles the actual ON/OFF timing; this plugin only provides the **on_percent calculation** and the optional power-level adjustment.
+It is designed for VTherm `over_switch` thermostats; the plugin configuration always targets the VTherm `climate`, whose underlying entity can be the stove `climate` or a dry-contact `switch`. VTherm's cycle scheduler handles ON/OFF requests; this plugin calculates `on_percent` and adjusts power only for a `climate` underlying.
 
 ```
 ┌────────────────────────────────────┐
@@ -94,12 +94,12 @@ HA lifecycle adapter. Implements `InterfacePropAlgorithmHandler`:
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `init_algorithm`      | Resolve effective options (`_resolve_options`), build `PelletRegulationController`, create `Store`.                                                                                                                           |
 | `async_added_to_hass` | Load persistent state from `Store`, call `controller.restore_state`.                                                                                                                                                          |
-| `async_startup`       | Trigger `on_state_changed(True)` → first `control_heating` iteration.                                                                                                                                                         |
+| `async_startup`       | For a switch, adopt its first known state without dating a transition; wait if it is unknown. The climate path still triggers `on_state_changed(True)` as before.                                                                                                          |
 | `remove`              | Schedule `store.async_save` via `hass.async_create_task`.                                                                                                                                                                     |
-| `control_heating`     | Call `controller.calculate`, detect real state transitions (ON↔OFF), update `thermostat.prop_algorithm`, call `scheduler.start_cycle` with `force=True` on any real transition, apply power level, publish HA state, persist. |
+| `control_heating`     | Call `controller.calculate`, detect real state transitions (ON↔OFF), update `thermostat.prop_algorithm`, call `scheduler.start_cycle` with `force=True` on any real transition, apply power level only for a climate underlying, publish HA state, persist. |
 | `on_state_changed`    | Forward to `control_heating` when `changed=True`.                                                                                                                                                                             |
 | `on_scheduler_ready`  | Store scheduler reference, register cycle callbacks.                                                                                                                                                                          |
-| `_apply_power_level`  | Call `climate.set_fan_mode / set_preset_mode` on underlying climate entities. Anti-spam: skip if level unchanged.                                                                                                             |
+| `_apply_power_level`  | Call `climate.set_fan_mode / set_preset_mode` on underlying climate entities; no call is made for a switch underlying. Anti-spam: skip if level unchanged.                                                                      |
 
 **Option resolution** (`_resolve_options`):
 
@@ -108,6 +108,8 @@ DEFAULT_OPTIONS ← global entry (data → options) ← per-thermostat entry (da
 ```
 
 The `options` dict (from OptionsFlow) always takes precedence over `data` (from ConfigFlow).
+
+For a `switch` underlying, the handler locally derives `power_control_enabled=false` and `power_boost_enabled=false` for the controller. Resolved and persisted options are not changed; the features resume if the VTherm is reconfigured with a `climate` underlying.
 
 ### `pellet/` — business logic
 
@@ -250,6 +252,12 @@ VTherm.async_control_heating
        └─ store.async_save(controller.save_state())
 ```
 
+### Dry-contact command contract
+
+Dry-contact configuration and initial software-state adoption are implemented. Complete automatic regulation remains conditional on verifying the upstream contract tracked by VTherm issue [#2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223): VTherm must seed its expected state once from the first valid switch state before `check_initial_state()`. The plugin does not read or modify VTherm private fields.
+
+Commanded ON/OFF transitions remain delegated to `scheduler.start_cycle(...)`: VTherm's `CycleScheduler` calls `UnderlyingSwitch.turn_on()` or `turn_off()`. The plugin must not call switch services directly or duplicate an OFF already delegated to VTherm. With VTherm 10.6.4, passively adopting an ON switch in `heat` mode can still be reversed by `repair_incorrect_state`; local unit tests do not prove the upstream contract. Contact ON/OFF represents a request and does not acknowledge physical ignition or shutdown.
+
 ---
 
 ## 7. Configuration UI
@@ -267,7 +275,7 @@ VTherm.async_control_heating
 - A local entry replaces the whole global configuration; missing local keys use defaults. Without a local entry, global settings apply.
 - Options updates the targeted live handler directly (or handlers without local entries for global changes). Reconfigure reloads the Pellet Stove entry, whose setup applies settings to the same live handler.
 - The existing handler retains its state object, timestamps, proxy, lock and scheduler. Diagnostic deadlines use the original timestamps and new durations.
-- Automatic ON is allowed only when every underlying climate exposes a recognized Duepi status that is not burning (`Off`, `Eco idle` or `Cooling down`). Missing, unavailable, unknown, transitional or conflicting states block ON. `Flame On` also prevents a duplicate ON.
+- For an underlying climate, automatic ON requires a recognized Duepi status that is not burning (`Off`, `Eco idle` or `Cooling down`); missing, unavailable, unknown, transitional or conflicting states block ON, and `Flame On` prevents a duplicate. For a switch, ON requires the HA contact state to be explicitly `off`; absent, unavailable, unknown or already `on` states block ignition.
 - A breached safety threshold can request OFF even without a target. A VTherm command already in flight remains serialized behind its lock; interruption or material command ordering is not guaranteed.
 - HA's `async_remove_entry` hook unregisters the factory after actual deletion. `async_unload_entry` does not, because HA also uses it during reload.
 
@@ -280,6 +288,10 @@ The `Store` key format is `vtherm_pellet_stove.<slugify(vtherm_unique_id)>`, ver
 - Written after every `control_heating` call.
 - Read once in `async_added_to_hass` and fed to `controller.restore_state`.
 - Contains all fields of `PelletState` as ISO-8601 strings for datetimes.
+- For a switch underlying only, transition dates are read tolerantly: malformed or future values become absent, naive datetimes are normalized to UTC, and a current-state date earlier than the opposite transition is discarded. Climate restoration keeps its existing parser.
+- After VTherm restores its mode, `async_startup` adopts the first valid switch state (`on` or `off`) once, without creating a transition date or sending a restoration command. If the contact is absent, `unknown` or `unavailable`, adoption waits until a known state arrives.
+- A valid relevant date is preserved: `last_on_at` for ON, `last_off_at` for OFF. Home Assistant downtime counts toward the duration. `next_action_allowed_at` remains based on the original date, even after its deadline; without a valid relevant date it is `null`, so no artificial initial delay is imposed.
+- Adoption describes only the estimated state. It does not confirm flame, shutdown or external actions while Home Assistant was stopped.
 
 ---
 
@@ -302,6 +314,8 @@ Anti-spam: `_apply_power_level` compares `current_level_index` with `_last_appli
 ### Boost
 
 `BoostManager.maybe_trigger` fires when `new_target − previous_target ≥ 0.5 °C`. It sets `state.boost_until = now + timedelta(minutes=power_boost_duration_min)`. While `boost_until > now`, `_compute_level_index` returns the last index (maximum level).
+
+With a `switch` underlying, neither `PowerMapper` nor `BoostManager` is enabled. A restored level and boost deadline remain in persisted state, but no level is applicable and the boost is inactive in runtime calculations; ON/OFF transition timestamps and their guard deadlines remain intact.
 
 ---
 
@@ -389,7 +403,7 @@ Each VTherm using `pellet_regulation` automatically creates a sensor entity:
 | `burning`  | `is_heating = true` AND elapsed ≥ `min_on_duration_min`                   |
 | `cooldown` | `is_heating = false` AND min_off+cooldown guard-rail still active         |
 
-The entity also exposes all active parameters (hysteresis thresholds, guard-rail values, last decisions) as attributes, making it easy to debug directly from the HA UI.
+The entity also exposes active parameters (hysteresis thresholds, guard-rail values, decisions and software deadlines) as attributes. With a dry contact, these describe the plugin's model and the HA contact state; they do not measure power, flame or successful shutdown.
 
 ---
 
