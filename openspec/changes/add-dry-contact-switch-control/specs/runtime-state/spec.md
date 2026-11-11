@@ -96,6 +96,12 @@ Au demarrage du parcours contact sec, l'integration SHALL adopter le premier eta
 - **THEN** cet etat est adopte avant d'autoriser une nouvelle decision automatique d'allumage
 - **AND** l'indisponibilite n'a pas ete assimilee a un contact OFF
 
+#### Scenario: Adoption ON avec reparation VTherm active
+
+- **GIVEN** un contact `on`, un VTherm en mode `heat` et la reparation automatique active
+- **WHEN** l'etat du contact est adopte, puis que VTherm execute sa reparation apres son delai d'activation
+- **THEN** la reparation ne commande pas OFF au seul motif que l'etat attendu interne n'a pas ete synchronise
+
 ### Requirement: Priorite de la date exploitable de l'etat courant
 
 Pour un contact connu, l'integration SHALL utiliser en priorite la date restauree exploitable correspondant a cet etat : `last_on_at` pour ON, `last_off_at` pour OFF. L'absence de l'autre date SHALL ne pas invalider celle-ci. Une date exploitable SHALL etre interpretable, non future et coherente avec l'etat adopte et la chronologie connue. La duree de l'arret de HA SHALL compter dans le temps ecoule.

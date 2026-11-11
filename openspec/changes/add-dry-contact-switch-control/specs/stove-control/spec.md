@@ -94,3 +94,19 @@ Un arret manuel de VTherm ou une securite haute SHALL demander l'ouverture du co
 - **WHEN** le controle de demarrage applique le mode VTherm
 - **THEN** l'ouverture du contact est demandee sans attente artificielle
 - **AND** une simple correction de l'etat logiciel ne remplace pas cette demande d'ouverture
+
+### Requirement: Coherence avec la reparation automatique VTherm
+
+Le plugin SHALL maintenir l'etat attendu par la reparation VTherm coherent avec toute adoption ou transition du switch. La reparation SHALL NOT commander l'etat oppose. Le plugin SHALL NOT desactiver repair ni modifier un etat prive ; toute synchronisation SHALL utiliser un contrat public. Sans contrat compatible, l'implementation SHALL attendre l'evolution suivie par l'issue VTherm #2223. Le garde-fou parent OFF de #2219 SHALL rester intact.
+
+#### Scenario: Adoption ON avec reparation active
+
+- **GIVEN** un contact `on`, un VTherm en mode `heat` et `repair_incorrect_state` active
+- **WHEN** l'integration adopte l'etat du contact et que la reparation devient eligible
+- **THEN** VTherm ne demande ni OFF ni une nouvelle commande ON a contretemps
+
+#### Scenario: Transition pilotee avec reparation active
+
+- **GIVEN** un contact dont l'etat adopte est coherent avec l'etat attendu par VTherm
+- **WHEN** l'integration demande une transition ON ou OFF puis que la reparation devient eligible
+- **THEN** la reparation ne renverse pas cette transition et n'emet pas de commande contradictoire

@@ -46,8 +46,15 @@ class PelletState:
             "boost_until": self.boost_until.isoformat() if self.boost_until else None,
         }
 
-    def restore_state(self, data: dict) -> None:
+    def restore_state(
+        self,
+        data: dict,
+        *,
+        tolerate_invalid_dates: bool = False,
+        now: datetime | None = None,
+    ) -> None:
         """Recharge l'état depuis un dict issu du Store HA."""
+
         if not data:
             return
         self.is_heating = bool(data.get("is_heating", False))
@@ -55,13 +62,21 @@ class PelletState:
         self.last_reason = data.get("last_reason")
 
         raw_on = data.get("last_on_at")
-        self.last_on_at = _parse_iso(raw_on)
+        parse_date = _parse_iso_tolerant if tolerate_invalid_dates else _parse_iso
+        self.last_on_at = parse_date(raw_on)
 
         raw_off = data.get("last_off_at")
-        self.last_off_at = _parse_iso(raw_off)
+        self.last_off_at = parse_date(raw_off)
+
+        if tolerate_invalid_dates:
+            reference = _to_utc(now or datetime.now(timezone.utc))
+            if self.last_on_at is not None and self.last_on_at > reference:
+                self.last_on_at = None
+            if self.last_off_at is not None and self.last_off_at > reference:
+                self.last_off_at = None
 
         raw_boost = data.get("boost_until")
-        self.boost_until = _parse_iso(raw_boost)
+        self.boost_until = parse_date(raw_boost)
 
 
 # ---------------------------------------------------------------------------
@@ -78,3 +93,20 @@ def _parse_iso(value: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _parse_iso_tolerant(value: str | None) -> datetime | None:
+    """Parse a switch history date, returning None for malformed values."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return _to_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+def _to_utc(value: datetime) -> datetime:
+    """Normalize an aware or naive datetime to UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

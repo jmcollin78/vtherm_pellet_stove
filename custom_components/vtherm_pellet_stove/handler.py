@@ -137,6 +137,7 @@ class PelletRegulationHandler:
         self._reset_lock = asyncio.Lock()
         self._resetting = False
         self._removed = False
+        self._switch_adoption_pending = False
         _LOGGER.debug("%s - __init__: handler created", self._thermostat.name)
 
     # ------------------------------------------------------------------
@@ -150,6 +151,9 @@ class PelletRegulationHandler:
         vtherm_uid = self._thermostat.unique_id
 
         self._opts = _resolve_options(hass, vtherm_uid)
+        power_control_enabled, power_boost_enabled = self._power_features_enabled(
+            self._opts
+        )
 
         self._controller = PelletRegulationController(
             name=self._thermostat.name,
@@ -161,10 +165,10 @@ class PelletRegulationHandler:
             min_off_duration_min=int(self._opts[CONF_MIN_OFF_DURATION_MIN]),
             cooldown_duration_min=int(self._opts[CONF_COOLDOWN_DURATION_MIN]),
             safety_room_temp=float(self._opts[CONF_SAFETY_ROOM_TEMP]),
-            power_control_enabled=bool(self._opts[CONF_POWER_CONTROL_ENABLED]),
+            power_control_enabled=power_control_enabled,
             power_levels=list(self._opts.get(CONF_POWER_LEVELS) or []) or None,
             power_default_level_index=int(self._opts[CONF_POWER_DEFAULT_LEVEL_INDEX]),
-            power_boost_enabled=bool(self._opts[CONF_POWER_BOOST_ENABLED]),
+            power_boost_enabled=power_boost_enabled,
             power_boost_duration_min=int(self._opts[CONF_POWER_BOOST_DURATION_MIN]),
         )
 
@@ -209,6 +213,9 @@ class PelletRegulationHandler:
             )
             previous_level_index = self._controller.current_level_index
             previous_level_value = self._controller.current_level_value
+            power_control_enabled, power_boost_enabled = self._power_features_enabled(
+                options
+            )
             self._controller.update_configuration(
                 hysteresis_on=float(options[CONF_HYSTERESIS_ON]),
                 hysteresis_off=float(options[CONF_HYSTERESIS_OFF]),
@@ -218,12 +225,12 @@ class PelletRegulationHandler:
                 min_off_duration_min=int(options[CONF_MIN_OFF_DURATION_MIN]),
                 cooldown_duration_min=int(options[CONF_COOLDOWN_DURATION_MIN]),
                 safety_room_temp=float(options[CONF_SAFETY_ROOM_TEMP]),
-                power_control_enabled=bool(options[CONF_POWER_CONTROL_ENABLED]),
+                power_control_enabled=power_control_enabled,
                 power_levels=list(options.get(CONF_POWER_LEVELS) or []) or None,
                 power_default_level_index=int(
                     options[CONF_POWER_DEFAULT_LEVEL_INDEX]
                 ),
-                power_boost_enabled=bool(options[CONF_POWER_BOOST_ENABLED]),
+                power_boost_enabled=power_boost_enabled,
                 power_boost_duration_min=int(
                     options[CONF_POWER_BOOST_DURATION_MIN]
                 ),
@@ -296,7 +303,12 @@ class PelletRegulationHandler:
         data = await self._store.async_load()
         if data:
             _LOGGER.debug("%s - async_added_to_hass: persisted data found", self._thermostat.name)
-            self._controller.restore_state(data)
+            is_switch = self._switch_underlying_entity_id() is not None
+            self._controller.restore_state(
+                data,
+                tolerate_invalid_dates=is_switch,
+                now=datetime.now(timezone.utc),
+            )
             _LOGGER.debug(
                 "%s - async_added_to_hass: restored state is_heating=%s reason=%s",
                 self._thermostat.name,
@@ -362,6 +374,12 @@ class PelletRegulationHandler:
         """Run startup actions after thermostat initialisation."""
         _LOGGER.debug("%s - async_startup: start", self._thermostat.name)
 
+        switch_entity_id = self._switch_underlying_entity_id()
+        if switch_entity_id is not None:
+            self._switch_adoption_pending = True
+            if self._adopt_switch_state():
+                await self._publish_current_state(datetime.now(timezone.utc))
+        else:
         # Guard: if the restored state says is_heating=True but VTherm is in
         # hvac_mode=off, the state is stale (HA shut down between the user
         # pressing OFF and the handler saving is_heating=False). Correct it
@@ -374,18 +392,18 @@ class PelletRegulationHandler:
         # super().async_added_to_hass(), so vtherm_hvac_mode is still None
         # when async_added_to_hass() runs.  async_startup() is called AFTER
         # super().async_startup(), so VTherm is fully initialised here.
-        if self._controller is not None and self._controller.is_heating:
-            hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
-            if hvac_mode == HVAC_MODE_OFF:
-                _LOGGER.warning(
-                    "%s - async_startup: stale is_heating=True detected while "
-                    "hvac_mode=off — correcting to is_heating=False without "
-                    "resetting last_off_at",
-                    self._thermostat.name,
-                )
-                self._controller.state.is_heating = False
+            if self._controller is not None and self._controller.is_heating:
+                hvac_mode = str(self._thermostat.vtherm_hvac_mode or "off").lower()
+                if hvac_mode == HVAC_MODE_OFF:
+                    _LOGGER.warning(
+                        "%s - async_startup: stale is_heating=True detected while "
+                        "hvac_mode=off — correcting to is_heating=False without "
+                        "resetting last_off_at",
+                        self._thermostat.name,
+                    )
+                    self._controller.state.is_heating = False
 
-        await self.on_state_changed(True)
+            await self.on_state_changed(True)
         if not self._removed:
             self._thermostat.hass.data.setdefault(DOMAIN, {}).setdefault(
                 DATA_HANDLERS, {}
@@ -498,6 +516,12 @@ class PelletRegulationHandler:
         async with self._control_lock:
             if self._resetting or self._removed:
                 return
+            if self._switch_adoption_pending:
+                if not self._adopt_switch_state():
+                    return
+                now = timestamp if timestamp is not None else datetime.now(timezone.utc)
+                await self._publish_current_state(now)
+                return
             await self._async_control_heating(timestamp, force)
 
     async def _async_control_heating(
@@ -559,7 +583,7 @@ class PelletRegulationHandler:
             slope=slope,
             hvac_mode=hvac_mode,
             now=now,
-            allow_turn_on=self._physical_heating_state() is False,
+            allow_turn_on=self._automatic_turn_on_allowed(),
         )
 
         # 2. (prop_algorithm is already the _PropAlgoProxy set in init_algorithm;
@@ -663,7 +687,8 @@ class PelletRegulationHandler:
             self._last_energy_at = None
 
         # 4. Apply power level on the underlying climate entity (optional).
-        if self._opts.get(CONF_POWER_CONTROL_ENABLED) and self._controller.is_heating:
+        power_control_enabled, _ = self._power_features_enabled(self._opts)
+        if power_control_enabled and self._controller.is_heating:
             _LOGGER.debug(
                 "%s - control_heating: power control active while heating, applying level",
                 self._thermostat.name,
@@ -674,7 +699,7 @@ class PelletRegulationHandler:
                 "%s - control_heating: power level application skipped "
                 "(enabled=%s is_heating=%s)",
                 self._thermostat.name,
-                self._opts.get(CONF_POWER_CONTROL_ENABLED),
+                power_control_enabled,
                 self._controller.is_heating,
             )
 
@@ -727,6 +752,48 @@ class PelletRegulationHandler:
                 return None
 
         return observations.pop() if len(observations) == 1 else None
+
+    def _automatic_turn_on_allowed(self) -> bool:
+        """Require an explicitly OFF contact or a confirmed OFF climate burner."""
+        switch_entity_id = self._switch_underlying_entity_id()
+        if switch_entity_id is not None:
+            state = self._thermostat.hass.states.get(switch_entity_id)
+            return state is not None and state.state == "off"
+        return self._physical_heating_state() is False
+
+    def _switch_underlying_entity_id(self) -> str | None:
+        """Return the one configured switch underlying, if this is a switch VTherm."""
+        underlying_list = self._thermostat.entry_infos.get(_CONF_UNDERLYING_LIST) or []
+        if len(underlying_list) != 1:
+            return None
+        entity_id = underlying_list[0]
+        if isinstance(entity_id, str) and entity_id.startswith("switch."):
+            return entity_id
+        return None
+
+    def _power_features_enabled(self, options: dict[str, Any]) -> tuple[bool, bool]:
+        """Keep optional power control and boost exclusive to climate underlyings."""
+        if self._switch_underlying_entity_id() is not None:
+            return False, False
+        return (
+            bool(options[CONF_POWER_CONTROL_ENABLED]),
+            bool(options[CONF_POWER_BOOST_ENABLED]),
+        )
+
+    def _adopt_switch_state(self) -> bool:
+        """Adopt the first known switch state without creating transition dates."""
+        if self._controller is None:
+            return False
+        entity_id = self._switch_underlying_entity_id()
+        if entity_id is None:
+            self._switch_adoption_pending = False
+            return False
+        state = self._thermostat.hass.states.get(entity_id)
+        if state is None or state.state not in ("on", "off"):
+            return False
+        self._controller.adopt_switch_state(state.state == "on")
+        self._switch_adoption_pending = False
+        return True
 
     async def _publish_current_state(self, now: datetime) -> None:
         """Publish and persist the current controller snapshot."""

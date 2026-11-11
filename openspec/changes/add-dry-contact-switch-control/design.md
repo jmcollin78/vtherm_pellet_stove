@@ -11,7 +11,7 @@ Constats tires du code et des tests existants :
 - `PelletState` conserve deja `is_heating`, `last_on_at` et `last_off_at`. `CycleGuard` et `get_debug_attributes` calculent deja les durees et `next_action_allowed_at` depuis ces dates. Une date absente ne bloque pas le garde-fou et produit une echeance nulle.
 - Le pilotage et le boost sont actives dans les valeurs integrees. Le simple filtrage des appels climate ne suffit donc pas : un switch pourrait encore afficher un niveau ou un boost sans effet.
 - Les tests du handler simulent le runtime, le Store et le scheduler ; leur sous-jacent est actuellement un climate avec `burner_status`. Ils ne prouvent pas le fonctionnement d'un vrai switch via VTherm.
-- Les sources VTherm sont absentes du dossier local correspondant. Le contrat avec la version cible doit etre valide explicitement avant de declarer l'implementation compatible.
+- Le code VTherm 10.6.4 est consultable dans le depot frere `../versatile_thermostat`; le contrat avec une version amont corrigee doit toutefois etre valide explicitement avant de declarer l'implementation compatible.
 - Le formulaire initial par thermostat regroupe aujourd'hui cible et reglages, puis cree directement l'entree. Les Options et la reconfiguration affichent les reglages sans avertissement specifique ; elles doivent aussi pouvoir resoudre le sous-jacent de la cible deja enregistree.
 
 ## Goals / Non-Goals
@@ -34,7 +34,7 @@ Constats tires du code et des tests existants :
 
 ### 1. Choisir le parcours depuis le sous-jacent, pas depuis une nouvelle option
 
-Identifier le cas d'un sous-jacent `switch` dans `underlying_entity_ids`, deja disponible sur le runtime VTherm. Pour les formulaires, resoudre l'entree VTherm associee a la cible du registre et lire sa configuration par les API HA existantes, sans lecture directe du stockage interne. Reutiliser une petite logique de classification afin que formulaires et runtime interpretent de la meme facon le domaine du sous-jacent. Conserver l'observation Duepi existante pour le parcours climate ; ne pas introduire une hierarchie d'adaptateurs pour ces deux cas.
+Identifier le cas d'un sous-jacent `switch` dans `underlying_entity_ids`, deja disponible sur le runtime VTherm. Pour les formulaires, suivre le `config_entry_id` de la cible dans l'entity registry HA puis lire `underlying_entity_ids` dans les donnees de ce `ConfigEntry`, sans lecture directe du stockage interne. Classer le domaine configure sans consulter l'etat instantane du sous-jacent : un `climate` generique ne prouve pas un retour Duepi. Reutiliser cette logique dans les formulaires et le runtime lorsque necessaire. Conserver l'observation Duepi existante pour le parcours climate ; ne pas introduire une hierarchie d'adaptateurs pour ces deux cas.
 
 La configuration du plugin continue de cibler le climate VTherm : le selecteur de `config_flow.py` n'est pas le selecteur du poele. Un climate intermediaire serait inutile et ne fournirait pas les attributs Duepi manquants.
 
@@ -79,6 +79,12 @@ Store charge --> dates restaurees --> mode VTherm restaure
 Dans la branche switch, effectuer l'adoption au startup sous la serialisation de controle existante, avant la premiere decision. Si le contact n'est pas encore connu, conserver une initialisation en attente jusqu'au premier etat connu ; ne pas autoriser de nouvel ON entre-temps. Les demandes prioritaires OFF ne sont pas subordonnees a cette autorisation ON.
 
 L'adoption fixe la chauffe demandee selon le contact, sans ecrire une date a maintenant. Elle n'est executee qu'une fois pour ce demarrage : ne pas resynchroniser aveuglement le controleur sur chaque lecture HA, au risque d'annuler une transition dont le retour du relais n'est pas encore arrive.
+
+La reparation automatique de VTherm compare aussi l'etat HA du switch a son propre etat attendu. Dans la version VTherm 10.6.4 (commit `bdef348b579b14d306291bb89099be01d9d2bc12`), le switch conserve cet attendu dans `_is_on_part_running`, initialise a faux. Le code du `CycleScheduler` passe les transitions normales par `turn_on()` ou `turn_off()`, qui mettent a jour cet attendu apres la commande. Les tests amont `test_cycle_scheduler.py` (39 passes) et `test_repair_incorrect_state_manager.py` (1 passe) ont ete executes, mais utilisent des doubles pour les sous-jacents et ne prouvent pas cette synchronisation avec le vrai switch. `test_check_initial_state.py` passe aussi (39 passes) ; son test `UnderlyingSwitch` remplace `turn_off()` par un mock et verifie l'appel : avec VTherm OFF et le contact ON, `check_initial_state()` demande OFF, mais en mode heat avec le contact ON, il ne synchronise pas l'attendu.
+
+Le chemin d'adoption passive ON en mode heat reste donc incompatible avec `repair_incorrect_state` : apres son delai d'activation, `_is_on_part_running` peut rester faux alors que le switch est ON, et `check_and_repair()` commande alors OFF. Les tests existants ont ete executes dans un environnement temporaire propre avec Home Assistant 2026.11.0, Home Assistant precharge avant pytest et les plugins `pytest_homeassistant`, `pytest_asyncio` et, pour le scheduler, `pytest_freezer` explicitement charges. Ils ne constituent pas un test combine de l'adoption et de repair ; le comportement contradictoire decoule ici du code reel de ces deux classes.
+
+Le code VTherm 10.6.4 ne fournit pas de contrat general d'adoption silencieuse. Pour poursuivre l'implementation, l'hypothese approuvee par l'utilisateur le 2026-11-10 est que VTherm fera evoluer son initialisation interne : au premier etat HA valide du switch, avant `check_initial_state()` et avant le premier controle, il initialisera `_is_on_part_running` une seule fois depuis `is_device_active`, sans emettre de commande. Le plugin ne lira ni ne modifiera ce champ prive. En mode OFF, le `check_initial_state()` existant pourra ensuite commander OFF et `turn_off()` remettra l'attendu a faux. Les etats absents, `unknown` ou `unavailable` ne seront pas adoptes ; l'initialisation attendra un etat valide. Cette hypothese est suivie par l'issue VTherm [#2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223), tandis que [#2219](https://github.com/jmcollin78/versatile_thermostat/issues/2219) garde son perimetre distinct de protection parent-OFF. La tache 1.2 reste a confirmer sur une version amont contenant le changement ; la verification finale est reprise en 5.2.
 
 La correction actuelle `is_heating=True` avec VTherm OFF reste propre au parcours climate. Pour un switch, ne pas effacer d'abord l'etat ON du contact : cela pourrait masquer l'ouverture necessaire. Appliquer ensuite le mode VTherm avec un unique chemin de commande OFF.
 
@@ -143,12 +149,13 @@ Mettre a jour les README et les guides utilisateur et techniques dans les deux l
 - [Double OFF ou OFF perdu a la relance] -> Propriete unique du chemin de commande et test de contrat VTherm obligatoire, distinct des tests unitaires locaux.
 - [Dates invalides ou futures] -> Repli sans date uniquement pour la date non exploitable, jamais remplacement systematique par maintenant.
 - [Options de puissance communes a plusieurs thermostats] -> Inhibition locale au runtime switch, sans modification des options persistantes partagees.
+- [Reparation VTherm contradictoire avec l'adoption ou une transition] -> Tester avec la fonction active et apres son delai d'activation ; ne pas contourner ses etats prives. Si aucun contrat public ne maintient la coherence, bloquer le parcours et attendre le contrat d'adoption suivi par l'issue #2223.
 - [Type mal deduit depuis le climate VTherm ou un relais indisponible] -> Lire le domaine du sous-jacent configure et ne pas assimiler une resolution impossible a un retour physique Duepi.
 - [Regressions du parcours climate] -> Conserver les tests Duepi, les priorites d'arret et les tests de restauration et de puissance existants.
 
 ## Migration Plan
 
 1. Implementer le parcours switch sans changer les identifiants d'entites ni la version du Store. Les donnees existantes restent lisibles.
-2. Executer les tests locaux et le test de contrat VTherm avant publication ; une verification materielle eventuelle reste distincte et sous controle de l'utilisateur.
+2. Executer les tests locaux et le test de contrat VTherm avant publication, y compris avec la reparation automatique active ; si le contrat requis manque, attendre l'evolution VTherm suivie par l'issue #2223. Une verification materielle eventuelle reste distincte et sous controle de l'utilisateur.
 3. Configurer le switch comme sous-jacent natif `over_switch`, sans commandes `set_hvac_mode` pour ce contact. Garder la cible plugin sur le climate VTherm.
 4. Pour revenir a une version ne supportant pas ce parcours, mettre d'abord VTherm sur OFF et laisser le poele effectuer son extinction. Ne pas compter sur cette ancienne version pour commander le switch ; conserver les dates et les donnees au lieu de les purger.

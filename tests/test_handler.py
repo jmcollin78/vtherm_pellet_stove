@@ -30,6 +30,7 @@ from custom_components.vtherm_pellet_stove.const import (
     CONF_MIN_ON_DURATION_MIN,
     CONF_POWER_CONTROL_ATTRIBUTE,
     CONF_POWER_CONTROL_ENABLED,
+    CONF_POWER_BOOST_ENABLED,
     CONF_POWER_LEVELS,
     CONF_SAFETY_ROOM_TEMP,
     CONF_TARGET_VTHERM,
@@ -99,6 +100,7 @@ def _make_thermostat(
     last_temperature_slope: float | None = None,
     vtherm_hvac_mode: str = "heat",
     underlying_list: list[str] | None = None,
+    underlying_state: str = "off",
 ):
     """Construit un faux InterfaceThermostatRuntime."""
     thermostat = MagicMock()
@@ -113,7 +115,8 @@ def _make_thermostat(
     underlying_list = underlying_list or ["climate.pellet_stove"]
     thermostat.entry_infos = {"underlying_entity_ids": underlying_list}
     for entity_id in underlying_list:
-        hass.states.async_set(entity_id, "off", {"burner_status": "Off"})
+        attributes = {"burner_status": "Off"} if entity_id.startswith("climate.") else {}
+        hass.states.async_set(entity_id, underlying_state, attributes)
     thermostat.prop_algorithm = None
     thermostat.cycle_min = 5
     thermostat.update_custom_attributes = MagicMock()
@@ -358,6 +361,49 @@ async def test_unknown_physical_state_blocks_automatic_ignition():
     assert handler._controller.last_reason == "physical_state_not_confirmed_off"
 
 
+@pytest.mark.parametrize(
+    ("contact_state", "turn_on_allowed"),
+    [
+        ("off", True),
+        ("on", False),
+        ("unknown", False),
+        ("unavailable", False),
+        ("missing", False),
+    ],
+)
+async def test_switch_automatic_ignition_requires_explicit_off_contact(
+    contact_state, turn_on_allowed
+):
+    hass = _make_hass()
+    thermostat = _make_thermostat(
+        hass,
+        target_temperature=20.0,
+        current_temperature=18.0,
+        vtherm_hvac_mode="heat",
+        underlying_list=["switch.pellet_stove"],
+        underlying_state=contact_state if contact_state != "missing" else "off",
+    )
+    if contact_state == "missing":
+        hass.states.get.side_effect = lambda _entity_id: None
+    handler = PelletRegulationHandler(thermostat)
+    handler.init_algorithm()
+    _mock_store(handler)
+    scheduler = _make_scheduler()
+    handler.on_scheduler_ready(scheduler)
+
+    await handler.control_heating(timestamp=_now())
+
+    assert handler._controller.is_heating is turn_on_allowed
+    if turn_on_allowed:
+        scheduler.start_cycle.assert_awaited_once()
+        _, on_percent, force = scheduler.start_cycle.call_args.args
+        assert on_percent == pytest.approx(1.0)
+        assert force is True
+    else:
+        scheduler.start_cycle.assert_not_awaited()
+        assert handler._controller.last_reason == "physical_state_not_confirmed_off"
+
+
 async def test_known_flame_does_not_send_duplicate_ignition():
     hass = _make_hass()
     thermostat = _make_thermostat(
@@ -427,6 +473,69 @@ async def test_safety_stop_without_target_requests_off():
     scheduler.cancel_cycle.assert_awaited_once()
     assert handler._controller.is_heating is False
     assert handler._controller.last_reason == "safety"
+
+
+@pytest.mark.parametrize("target_temperature", [None, 20.0])
+async def test_switch_adopted_on_safety_shutdown_ignores_min_on(target_temperature):
+    entry = _make_entry(data={CONF_SAFETY_ROOM_TEMP: 26.0}, unique_id=DOMAIN)
+    hass = _make_hass(entries=[entry])
+    thermostat = _make_thermostat(
+        hass,
+        target_temperature=target_temperature,
+        current_temperature=27.0,
+        underlying_list=["switch.pellet_stove"],
+        underlying_state="on",
+    )
+    handler = PelletRegulationHandler(thermostat)
+    handler.init_algorithm()
+    _mock_store(handler, load_data=None)
+    scheduler = _make_scheduler()
+    handler.on_scheduler_ready(scheduler)
+
+    await handler.async_added_to_hass()
+    await handler.async_startup()
+    assert handler._controller.state.last_on_at is None
+    assert handler._controller.state.last_off_at is None
+    scheduler.start_cycle.assert_not_awaited()
+
+    stopped_at = _now()
+    await handler.control_heating(timestamp=stopped_at)
+
+    assert handler._controller.is_heating is False
+    assert handler._controller.state.last_off_at == stopped_at
+    assert handler._controller.last_reason == "safety"
+    scheduler.start_cycle.assert_awaited_once_with("heat", 0.0, True)
+    scheduler.cancel_cycle.assert_awaited_once()
+
+
+async def test_switch_adopted_on_manual_parent_off_does_not_duplicate_stop():
+    hass = _make_hass()
+    thermostat = _make_thermostat(
+        hass,
+        vtherm_hvac_mode="heat",
+        underlying_list=["switch.pellet_stove"],
+        underlying_state="on",
+    )
+    handler = PelletRegulationHandler(thermostat)
+    handler.init_algorithm()
+    _mock_store(handler, load_data=None)
+    scheduler = _make_scheduler()
+    handler.on_scheduler_ready(scheduler)
+
+    await handler.async_added_to_hass()
+    await handler.async_startup()
+    assert handler._controller.state.last_on_at is None
+    assert handler._controller.state.last_off_at is None
+    scheduler.start_cycle.assert_not_awaited()
+
+    stopped_at = _now()
+    thermostat.vtherm_hvac_mode = "off"
+    await handler.control_heating(timestamp=stopped_at)
+
+    assert handler._controller.is_heating is False
+    assert handler._controller.state.last_off_at == stopped_at
+    assert handler._controller.last_reason == "hvac_off"
+    scheduler.start_cycle.assert_not_awaited()
 
 
 async def test_unload_during_stop_prevents_reset_of_removed_handler():
@@ -758,6 +867,115 @@ class TestScenario7OptionsUpdate:
             {"entity_id": "climate.pellet_stove", "fan_mode": "high"},
             blocking=False,
         )
+
+    async def test_switch_disables_power_features_without_losing_climate_options(self):
+        """Power settings and runtime state survive temporary switch mode."""
+        options = {
+            CONF_POWER_CONTROL_ENABLED: True,
+            CONF_POWER_BOOST_ENABLED: True,
+            CONF_POWER_LEVELS: ["low", "medium", "high"],
+        }
+        entry = _make_entry(data={}, options=options, unique_id=DOMAIN)
+        hass = _make_hass(entries=[entry])
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="on",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        controller = handler._controller
+        controller.state.is_heating = True
+        controller.state.current_level_index = 1
+        controller.state.last_on_at = _now() - timedelta(minutes=10)
+        controller.state.boost_until = _now() + timedelta(minutes=5)
+        saved_last_on_at = controller.state.last_on_at
+        saved_boost_until = controller.state.boost_until
+
+        assert handler._opts[CONF_POWER_CONTROL_ENABLED] is True
+        assert handler._opts[CONF_POWER_BOOST_ENABLED] is True
+        assert controller._power_control_enabled is False
+        assert controller._power_mapper is None
+        assert controller._boost_manager is None
+
+        entry.options = {
+            **options,
+            CONF_POWER_CONTROL_ENABLED: False,
+            CONF_POWER_BOOST_ENABLED: False,
+        }
+        assert await handler.async_update_options()
+        assert controller._power_control_enabled is False
+        assert controller._power_mapper is None
+        assert controller._boost_manager is None
+        assert controller.state.current_level_index == 1
+        assert controller.state.last_on_at == saved_last_on_at
+        assert controller.state.boost_until == saved_boost_until
+        hass.services.async_call.assert_not_awaited()
+
+        entry.options = {**options, CONF_POWER_LEVELS: ["low", "middle", "high"]}
+        assert await handler.async_update_options()
+        assert controller._power_control_enabled is False
+        assert controller._power_mapper is None
+        assert controller._boost_manager is None
+        assert controller.state.current_level_index == 1
+        assert controller.state.last_on_at == saved_last_on_at
+        assert controller.state.boost_until == saved_boost_until
+
+        thermostat.entry_infos["underlying_entity_ids"] = ["climate.pellet_stove"]
+        assert await handler.async_update_options()
+        assert controller._power_control_enabled is True
+        assert controller.current_level_value == "middle"
+        assert controller._boost_manager is not None
+        assert controller.state.current_level_index == 1
+        assert controller.state.last_on_at == saved_last_on_at
+        assert controller.state.boost_until == saved_boost_until
+
+    async def test_switch_power_inhibition_is_local_with_shared_global_options(self):
+        """A switch VTherm cannot disable power control on a climate VTherm."""
+        global_options = {
+            CONF_POWER_CONTROL_ENABLED: True,
+            CONF_POWER_BOOST_ENABLED: True,
+            CONF_POWER_CONTROL_ATTRIBUTE: "fan_mode",
+            CONF_POWER_LEVELS: ["1", "2", "3", "4", "5"],
+        }
+        entry = _make_entry(data=global_options, options={}, unique_id=DOMAIN)
+        hass = _make_hass(entries=[entry])
+        switch_handler = PelletRegulationHandler(
+            _make_thermostat(
+                hass,
+                unique_id="switch_vtherm",
+                underlying_list=["switch.pellet_stove"],
+                underlying_state="on",
+            )
+        )
+        climate_handler = PelletRegulationHandler(
+            _make_thermostat(hass, unique_id="climate_vtherm")
+        )
+        switch_handler.init_algorithm()
+        climate_handler.init_algorithm()
+
+        assert switch_handler._controller._power_control_enabled is False
+        assert switch_handler._controller._boost_manager is None
+        assert climate_handler._controller._power_control_enabled is True
+        assert climate_handler._controller._boost_manager is not None
+        switch_handler._controller.state.is_heating = True
+        switch_handler._controller.state.current_level_index = 2
+        climate_handler._controller.state.is_heating = True
+        climate_handler._controller.state.current_level_index = 2
+
+        await switch_handler._apply_power_level()
+        hass.services.async_call.assert_not_awaited()
+        await climate_handler._apply_power_level()
+        await climate_handler._apply_power_level()
+
+        hass.services.async_call.assert_awaited_once_with(
+            "climate",
+            "set_fan_mode",
+            {"entity_id": "climate.pellet_stove", "fan_mode": "3"},
+            blocking=False,
+        )
+        assert entry.data == global_options
+        assert entry.options == {}
 
     async def test_sensor_is_recreated_after_platform_unload(self):
         """A platform reload registers a fresh sensor for the live handler."""
@@ -1318,6 +1536,466 @@ class TestScenario10RestoreAfterRestart:
         await handler.async_added_to_hass()
 
         assert handler._controller.is_heating is False
+
+    @pytest.mark.parametrize(
+        ("contact_state", "expected_heating"),
+        [("on", True), ("off", False)],
+    )
+    async def test_switch_startup_adopts_without_dates_or_commands(
+        self, contact_state, expected_heating
+    ):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            vtherm_hvac_mode="heat",
+            underlying_list=["switch.pellet_stove"],
+            underlying_state=contact_state,
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        store = _mock_store(handler, load_data=None)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.is_heating is expected_heating
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is None
+        store.async_save.assert_awaited_once()
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+
+    async def test_switch_startup_on_with_parent_off_preserves_adopted_state(self):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            vtherm_hvac_mode="off",
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="on",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=None)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.is_heating is True
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is None
+        scheduler.start_cycle.assert_not_awaited()
+
+    @pytest.mark.parametrize("initial_state", ["unknown", "unavailable"])
+    @pytest.mark.parametrize("known_state", ["on", "off"])
+    async def test_switch_adoption_waits_until_state_is_known(
+        self, initial_state, known_state
+    ):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state=initial_state,
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=None)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+        assert handler._switch_adoption_pending is True
+
+        await handler.control_heating(timestamp=_now())
+        assert handler._controller.is_heating is False
+        scheduler.start_cycle.assert_not_awaited()
+
+        hass.states.async_set("switch.pellet_stove", known_state)
+        await handler.control_heating(timestamp=_now())
+
+        assert handler._switch_adoption_pending is False
+        assert handler._controller.is_heating is (known_state == "on")
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is None
+        scheduler.start_cycle.assert_not_awaited()
+
+    async def test_missing_switch_state_does_not_adopt(self):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="off",
+        )
+        hass.states.get.side_effect = lambda _entity_id: None
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=None)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+        await handler.control_heating(timestamp=_now())
+
+        assert handler._switch_adoption_pending is True
+        assert handler._controller.is_heating is False
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is None
+
+    @pytest.mark.parametrize(
+        ("contact_state", "stored_on", "stored_off", "expected_on", "expected_off"),
+        [
+            (
+                "on",
+                "2026-01-15T19:30:00",
+                None,
+                datetime(2026, 1, 15, 19, 30, tzinfo=timezone.utc),
+                None,
+            ),
+            (
+                "off",
+                None,
+                "2026-01-15T19:30:00+00:00",
+                None,
+                datetime(2026, 1, 15, 19, 30, tzinfo=timezone.utc),
+            ),
+            (
+                "on",
+                "not-an-iso-date",
+                None,
+                None,
+                None,
+            ),
+        ],
+    )
+    async def test_switch_restore_preserves_only_valid_relevant_date(
+        self, contact_state, stored_on, stored_off, expected_on, expected_off
+    ):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state=contact_state,
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(
+            handler,
+            load_data={
+                "is_heating": contact_state == "on",
+                "last_on_at": stored_on,
+                "last_off_at": stored_off,
+            },
+        )
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.state.last_on_at == expected_on
+        assert handler._controller.state.last_off_at == expected_off
+
+    async def test_switch_restore_discards_future_and_contradictory_current_date(self):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="on",
+        )
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        old_on = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        recent_off = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(
+            handler,
+            load_data={
+                "is_heating": True,
+                "last_on_at": future,
+                "last_off_at": recent_off,
+            },
+        )
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is not None
+
+        _mock_store(
+            handler,
+            load_data={
+                "is_heating": True,
+                "last_on_at": old_on,
+                "last_off_at": recent_off,
+            },
+        )
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is not None
+
+    async def test_switch_restore_inhibits_old_power_state_without_losing_deadlines(
+        self,
+    ):
+        now = datetime.now(timezone.utc)
+        last_on_at = now - timedelta(minutes=10)
+        last_off_at = now - timedelta(hours=2)
+        boost_until = now + timedelta(minutes=5)
+        stored_data = {
+            "is_heating": True,
+            "current_level_index": 2,
+            "last_on_at": last_on_at.isoformat(),
+            "last_off_at": last_off_at.isoformat(),
+            "last_reason": "below_on_threshold",
+            "boost_until": boost_until.isoformat(),
+        }
+        hass = _make_hass(
+            entries=[
+                _make_entry(
+                    data={},
+                    options={
+                        CONF_POWER_CONTROL_ENABLED: True,
+                        CONF_POWER_BOOST_ENABLED: True,
+                        CONF_POWER_LEVELS: ["1", "2", "3", "4", "5"],
+                    },
+                    unique_id=DOMAIN,
+                )
+            ]
+        )
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="on",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        store = _mock_store(handler, load_data=stored_data)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        controller = handler._controller
+        assert controller.state.is_heating is True
+        assert controller.state.current_level_index == 2
+        assert controller.current_level_value is None
+        assert controller._boost_manager is None
+        assert controller.state.last_on_at == last_on_at
+        assert controller.state.last_off_at == last_off_at
+        assert controller.state.boost_until == boost_until
+        debug_state = controller.get_debug_attributes(now)
+        assert debug_state["boost_active"] is False
+        assert debug_state["next_action_allowed_at"] == (
+            last_on_at + timedelta(minutes=30)
+        ).isoformat()
+        assert store.async_save.await_args.args[0]["boost_until"] == boost_until.isoformat()
+        hass.services.async_call.assert_not_awaited()
+        scheduler.start_cycle.assert_not_awaited()
+        scheduler.cancel_cycle.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("contact_state", "current_temperature", "expected_heating", "date_key"),
+        [
+            ("off", 18.0, True, "last_on_at"),
+            ("on", 20.5, False, "last_off_at"),
+        ],
+    )
+    async def test_switch_first_controlled_transition_is_dated_after_adoption(
+        self, contact_state, current_temperature, expected_heating, date_key
+    ):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            current_temperature=current_temperature,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state=contact_state,
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        store = _mock_store(handler, load_data=None)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        assert handler._controller.state.last_on_at is None
+        assert handler._controller.state.last_off_at is None
+        scheduler.start_cycle.assert_not_awaited()
+
+        transition_at = _now()
+        await handler.control_heating(timestamp=transition_at)
+
+        assert handler._controller.is_heating is expected_heating
+        assert getattr(handler._controller.state, date_key) == transition_at
+        scheduler.start_cycle.assert_awaited_once()
+        _, on_percent, force = scheduler.start_cycle.call_args.args
+        assert on_percent == pytest.approx(1.0 if expected_heating else 0.0)
+        assert force is True
+        scheduler.cancel_cycle.assert_awaited_once()
+        saved_state = store.async_save.await_args_list[-1].args[0]
+        assert saved_state[date_key] == transition_at.isoformat()
+
+    async def test_switch_cycles_hold_and_restore_without_duplicate_commands(self):
+        initial_on_at = _now()
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            current_temperature=18.0,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="off",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        store = _mock_store(handler, load_data=None)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+        await handler.control_heating(timestamp=initial_on_at)
+        assert handler._controller.state.last_on_at == initial_on_at
+        hass.states.async_set("switch.pellet_stove", "on")
+
+        thermostat.current_temperature = 20.0
+        await handler.control_heating(timestamp=initial_on_at + timedelta(minutes=1))
+        assert handler._controller.state.last_on_at == initial_on_at
+        scheduler.start_cycle.assert_awaited_once()
+
+        guard = handler._controller._guard
+        off_at = initial_on_at + timedelta(minutes=guard.min_on_duration_min + 1)
+        thermostat.current_temperature = 20.5
+        await handler.control_heating(timestamp=off_at)
+        assert handler._controller.state.last_off_at == off_at
+        assert scheduler.start_cycle.await_count == 2
+        assert [call.args[1] for call in scheduler.start_cycle.await_args_list] == [
+            1.0,
+            0.0,
+        ]
+        assert [call.args[2] for call in scheduler.start_cycle.await_args_list] == [
+            True,
+            True,
+        ]
+        assert scheduler.cancel_cycle.await_count == 2
+        hass.states.async_set("switch.pellet_stove", "off")
+        off_snapshot = store.async_save.await_args_list[-1].args[0]
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            current_temperature=20.0,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="off",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        store = _mock_store(handler, load_data=off_snapshot)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+        assert handler._controller.state.last_on_at == initial_on_at
+        assert handler._controller.state.last_off_at == off_at
+        scheduler.start_cycle.assert_not_awaited()
+
+        await handler.control_heating(timestamp=off_at + timedelta(minutes=1))
+        assert handler._controller.state.last_off_at == off_at
+        scheduler.start_cycle.assert_not_awaited()
+
+        next_on_at = off_at + timedelta(
+            minutes=guard.min_off_duration_min + guard.cooldown_duration_min + 1
+        )
+        thermostat.current_temperature = 18.0
+        await handler.control_heating(timestamp=next_on_at)
+        assert handler._controller.state.last_on_at == next_on_at
+        assert scheduler.start_cycle.await_count == 1
+        _, on_percent, force = scheduler.start_cycle.call_args.args
+        assert on_percent == pytest.approx(1.0)
+        assert force is True
+        scheduler.cancel_cycle.assert_awaited_once()
+        hass.states.async_set("switch.pellet_stove", "on")
+        on_snapshot = store.async_save.await_args_list[-1].args[0]
+
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            current_temperature=20.0,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state="on",
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        _mock_store(handler, load_data=on_snapshot)
+        scheduler = _make_scheduler()
+        handler.on_scheduler_ready(scheduler)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+        await handler.control_heating(timestamp=next_on_at + timedelta(minutes=1))
+
+        assert handler._controller.is_heating is True
+        assert handler._controller.state.last_on_at == next_on_at
+        assert handler._controller.state.last_off_at == off_at
+        scheduler.start_cycle.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("contact_state", "elapsed_offset"),
+        [
+            ("on", -1),
+            ("on", 0),
+            ("on", 1),
+            ("off", -1),
+            ("off", 0),
+            ("off", 1),
+        ],
+    )
+    async def test_switch_restored_guard_deadlines_keep_original_timestamp(
+        self, contact_state, elapsed_offset
+    ):
+        hass = _make_hass()
+        thermostat = _make_thermostat(
+            hass,
+            underlying_list=["switch.pellet_stove"],
+            underlying_state=contact_state,
+        )
+        handler = PelletRegulationHandler(thermostat)
+        handler.init_algorithm()
+        guard = handler._controller._guard
+        required_minutes = (
+            guard.min_on_duration_min
+            if contact_state == "on"
+            else guard.min_off_duration_min + guard.cooldown_duration_min
+        )
+        elapsed_minutes = required_minutes + elapsed_offset
+        transition_at = _now() - timedelta(minutes=elapsed_minutes)
+        state_key = "last_on_at" if contact_state == "on" else "last_off_at"
+        store_data = {
+            "is_heating": contact_state == "on",
+            "last_on_at": transition_at.isoformat() if contact_state == "on" else None,
+            "last_off_at": transition_at.isoformat() if contact_state == "off" else None,
+        }
+        _mock_store(handler, load_data=store_data)
+
+        await handler.async_added_to_hass()
+        await handler.async_startup()
+
+        adopted_at = getattr(handler._controller.state, state_key)
+        assert adopted_at == transition_at
+        expected_deadline = transition_at + timedelta(minutes=required_minutes)
+        assert (
+            handler._controller.get_debug_attributes(_now())["next_action_allowed_at"]
+            == expected_deadline.isoformat()
+        )
+        can_transition = elapsed_minutes >= required_minutes
+        if contact_state == "on":
+            assert guard.can_turn_off(_now(), handler._controller.state) is can_transition
+        else:
+            assert guard.can_turn_on(_now(), handler._controller.state) is can_transition
 
     async def test_state_persisted_after_control_heating(self):
         """control_heating sauvegarde l'état dans le Store."""

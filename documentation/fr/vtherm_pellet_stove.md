@@ -16,7 +16,7 @@
     - [Étape 1 — Installer Versatile Thermostat](#étape-1--installer-versatile-thermostat)
     - [Étape 2 — Installer vtherm\_pellet\_stove et créer la configuration par défaut](#étape-2--installer-vtherm_pellet_stove-et-créer-la-configuration-par-défaut)
     - [Étape 3 — Créer le VTherm de type `over_switch`](#étape-3--créer-le-vtherm-de-type-over_switch)
-    - [Étape 4 — Ajouter les commandes personnalisées d'allumage et d'extinction](#étape-4--ajouter-les-commandes-personnalisées-dallumage-et-dextinction)
+    - [Étape 4 — Configurer la commande du sous-jacent climate](#étape-4--configurer-la-commande-du-sous-jacent-climate)
     - [Étape 5 — Relier vtherm\_pellet\_stove au VTherm](#étape-5--relier-vtherm_pellet_stove-au-vtherm)
   - [3. Fonctionnement](#3-fonctionnement)
   - [4. Configuration de Versatile Thermostat](#4-configuration-de-versatile-thermostat)
@@ -50,7 +50,7 @@
 | [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) | 10.0             |
 | HACS                                                                       | 1.34             |
 
-Votre poêle à pellets **doit être déjà exposé comme entité `climate`** dans Home Assistant (via Duepi EVO, ESPHome, MCZ, EdilKamin, ou toute autre intégration). Ce plugin ne communique **pas** directement avec les poêles.
+Le poêle peut être piloté par une entité `climate` (Duepi EVO, ESPHome, MCZ, EdilKamin, …) ou par un `switch` natif de contact sec dans VTherm `over_switch`. Le plugin ne communique jamais directement avec le poêle : sa cible reste l'entité `climate` du VTherm.
 
 ---
 
@@ -100,15 +100,15 @@ Se référer à la [documentation de Versatile Thermostat](https://github.com/jm
 
 1. Aller dans **Paramètres → Appareils et services → Versatile Thermostat → Ajouter**.
 2. Choisir le type de thermostat **`over_switch`**.
-3. Dans le champ **Entité sous-jacente**, sélectionner l'entité `climate` qui contrôle le poêle à pellets (ex. `climate.duepi_evo`).
+3. Dans le champ **Entité sous-jacente**, sélectionner soit le `climate` du poêle (ex. `climate.duepi_evo`), soit le `switch` natif du contact sec.
 4. Dans le champ **Fonction proportionnelle** (algorithme), sélectionner **`pellet_regulation`**.
 5. Définir la durée du cycle (`cycle_min`) à `60` minutes.
 6. Définir le **Délai d'activation minimal** à `1800` s (30 min) et le **Délai de désactivation minimal** à `1500` s (25 min) — ces valeurs doivent correspondre à `min_on_duration_min` et `min_off_duration_min + cooldown_duration_min`.
 7. Compléter les autres paramètres VTherm (nom, capteur de température, etc.) et sauvegarder.
 
-### Étape 4 — Ajouter les commandes personnalisées d'allumage et d'extinction
+### Étape 4 — Configurer la commande du sous-jacent climate
 
-Le mode `over_switch` de VTherm communique avec le poêle via deux appels de service configurables. Ces commandes doivent être renseignées dans la **page de configuration du sous-jacent** du VTherm créé à l'étape précédente :
+Cette étape concerne uniquement un sous-jacent `climate`. Dans la **page de configuration du sous-jacent** du VTherm créé à l'étape précédente :
 
 1. Ouvrir l'entité VTherm → **Options** → page **Entités sous-jacentes**.
 2. Dans le champ **Commande d'allumage** (`vswitch_on`), saisir :
@@ -119,9 +119,9 @@ Le mode `over_switch` de VTherm communique avec le poêle via deux appels de ser
    ```
    set_hvac_mode/hvac_mode:off
    ```
-4. Sauvegarder. VTherm appellera désormais `climate.set_hvac_mode(hvac_mode=heat)` pour allumer le poêle et `climate.set_hvac_mode(hvac_mode=off)` pour l'éteindre.
+4. Sauvegarder. VTherm appellera `climate.set_hvac_mode(hvac_mode=heat/off)` pour commander le poêle.
 
-> **Pourquoi ces commandes ?** Les poêles à pellets sont exposés comme entités `climate`, pas `switch`. La syntaxe `vswitch_on/off` permet à VTherm d'appeler n'importe quel service HA au format `nom_service/clé:valeur`.
+Pour un sous-jacent `switch`, VTherm utilise son pilotage natif du relais : ne pas saisir de commandes `set_hvac_mode` et ne pas créer de climate intermédiaire.
 
 ### Étape 5 — Relier vtherm_pellet_stove au VTherm
 
@@ -140,6 +140,8 @@ Si les paramètres par défaut globaux conviennent à ce poêle, aucune étape s
 
 > Les valeurs par thermostat ont toujours la priorité sur les defaults globaux. Il est possible d'avoir une entrée par poêle.
 
+L'entrée par thermostat cible le `climate` VTherm, même lorsque celui-ci commande un `switch`. Le type de sous-jacent est détecté automatiquement; les formulaires de création, d'Options et de reconfiguration affichent l'avertissement contact sec et les champs des trois durées. Aucun choix manuel switch/climate n'est demandé.
+
 ---
 
 ## 3. Fonctionnement
@@ -148,8 +150,8 @@ Si les paramètres par défaut globaux conviennent à ce poêle, aucune étape s
 
 1. **Calcule `on_percent`** — une valeur binaire 0 ou 1 dérivée d'une hystérésis paramétrable sur la température ambiante.
 2. **Applique les garde-fous propres au pellet** — durées minimales de marche/arrêt et délai de refroidissement pour éviter les cycles d'allumage excessifs.
-3. **Envoie les commandes ON/OFF** — le cycle scheduler de VTherm traduit `on_percent` en appels `set_hvac_mode` sur l'entité `climate` du poêle (via `vswitch_on` / `vswitch_off`).
-4. **Ajuste optionnellement le niveau de puissance** — le plugin appelle `set_fan_mode` ou `set_preset_mode` en fonction de l'écart de température (ΔT) et de la pente.
+3. **Demande ON/OFF via VTherm** — les transitions climate utilisent `vswitch_on/off`; un sous-jacent switch est commandé par le chemin natif de VTherm. Les maintiens ne répètent pas les commandes.
+4. **Ajuste optionnellement le niveau de puissance** — sur un sous-jacent climate, le plugin appelle `set_fan_mode` ou `set_preset_mode` selon l'écart de température (ΔT) et la pente.
 
 ```
 Pièce trop froide                     Pièce à consigne
@@ -160,6 +162,10 @@ current ≤ target − hysteresis_on      |
                                            set_hvac_mode(heat)
 ```
 
+Avec un contact sec, ON/OFF exprime seulement une demande : aucune flamme ni extinction effective n'est observée. Au démarrage, l'état connu du contact est adopté sans créer de date de transition. Les dates exploitables sont conservées et le temps hors ligne compte; sans date pertinente, aucun délai initial artificiel n'est imposé. Aucun historique Recorder n'est consulté. L'utilisateur doit tenir compte des manoeuvres effectuées avant le démarrage de HA.
+
+**Compatibilité VTherm :** ne pas activer ce parcours avec VTherm 10.6.4, dont la réparation automatique peut inverser une adoption passive ON en mode `heat`. Attendre une version intégrant le contrat suivi par [l'issue #2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223) et vérifier cette version avant usage.
+
 ---
 
 ## 4. Configuration de Versatile Thermostat
@@ -169,15 +175,16 @@ Créer un VTherm en mode **`over_switch`** avec les paramètres suivants :
 | Option VTherm                      | Valeur                                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
 | **Type de thermostat**             | `over_switch`                                                                                     |
-| **Entité sous-jacente**            | `climate.<votre_poele>` (ex. `climate.duepi_evo`)                                                 |
+| **Entité sous-jacente**            | `climate.<votre_poele>` ou `switch.<contact_sec>`                                                 |
 | **Fonction proportionnelle**       | `pellet_regulation`                                                                               |
-| **Commande `vswitch_on`**          | `set_hvac_mode/hvac_mode:heat`                                                                    |
-| **Commande `vswitch_off`**         | `set_hvac_mode/hvac_mode:off`                                                                     |
+| **Commandes personnalisées**       | `vswitch_on/off` avec `set_hvac_mode` uniquement pour un sous-jacent climate                      |
 | **Durée du cycle** (`cycle_min`)   | 60 (minutes)                                                                                      |
 | **Délai d'activation minimal**     | 1800 (secondes, soit 30 min) — doit correspondre à `min_on_duration_min`                          |
 | **Délai de désactivation minimal** | 1500 (secondes, soit 25 min) — doit correspondre à `min_off_duration_min + cooldown_duration_min` |
 
 > **Pourquoi `over_switch` ?** Le mode `over_switch` de VTherm expose le point d'extension `InterfacePropAlgorithmFactory` qui permet aux plugins externes d'enregistrer des algorithmes de régulation personnalisés. Les options `vswitch_on/off` permettent de cibler n'importe quel domaine HA, y compris `climate`.
+
+La configuration Pellet Stove sélectionne toujours le `climate` VTherm. Pour le contact sec, régler `min_on_duration_min` afin qu'il couvre l'allumage et la chauffe utile; `min_off_duration_min` additionné à `cooldown_duration_min` doit couvrir l'extinction et le repos. Le switch ne donne aucun retour physique. Sans date persistée exploitable, le délai initial est considéré satisfait : l'utilisateur est responsable de l'état réel et des manoeuvres antérieures.
 
 ---
 
@@ -219,9 +226,9 @@ Les deux types d'entrées (globale et par thermostat) exposent un bouton **Optio
 
 | Paramètre               | Défaut    | Description                                                                                                               |
 | ----------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `min_on_duration_min`   | `30 min`  | Durée minimale de chauffe avant qu'une extinction soit autorisée. Protège la bougie.                                      |
-| `min_off_duration_min`  | `20 min`  | Durée minimale d'arrêt avant qu'un rallumage soit autorisé.                                                               |
-| `cooldown_duration_min` | `5 min`   | Délai de refroidissement supplémentaire ajouté après chaque extinction.                                                   |
+| `min_on_duration_min`   | `30 min`  | Durée minimale entre une demande ON et une extinction régulée; inclure l'allumage et la chauffe utile.                   |
+| `min_off_duration_min`  | `20 min`  | Durée minimale d'arrêt avant un rallumage; avec le refroidissement, couvrir l'extinction complète et le repos.           |
+| `cooldown_duration_min` | `5 min`   | Délai supplémentaire après OFF, ajouté au minimum d'arrêt.                                                               |
 | `safety_room_temp`      | `26,0 °C` | Température ambiante au-delà de laquelle le poêle est **immédiatement forcé à l'arrêt** (outrepasse tous les garde-fous). |
 
 ### Pilotage du niveau de puissance (optionnel)
@@ -234,6 +241,8 @@ Les deux types d'entrées (globale et par thermostat) exposent un bouton **Optio
 | `power_default_level_index` | `2`                     | Index par défaut quand la pente de température est inconnue.        |
 | `power_boost_enabled`       | `true`                  | Active un boost temporaire au maximum après une hausse de consigne. |
 | `power_boost_duration_min`  | `15 min`                | Durée de la phase de boost.                                         |
+
+Le pilotage de puissance et le boost ne s'appliquent qu'avec un sous-jacent `climate`. Pour un contact sec `switch`, ils sont automatiquement neutralisés à l'exécution sans modifier les réglages configurés. Le diagnostic décrit l'état logiciel du régulateur, pas une mesure de puissance, de flamme ou d'extinction réelle.
 
 ---
 

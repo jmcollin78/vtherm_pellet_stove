@@ -22,16 +22,18 @@
 
 ## What is vtherm_pellet_stove?
 
-`vtherm_pellet_stove` registers a new proportional algorithm named **`pellet_regulation`** in the [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm) API. It extends VTherm `over_switch` thermostats that target a `climate` entity (e.g. a Duepi EVO, an ESPHome stove, MCZ, EdilKamin, …).
+`vtherm_pellet_stove` registers a new proportional algorithm named **`pellet_regulation`** in the [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm) API. It extends VTherm `over_switch` thermostats with either a stove `climate` entity or a native dry-contact `switch`. The plugin configuration always targets the VTherm's `climate` entity.
 
 Key features:
 
 - **Parameterizable hysteresis** — configurable `hysteresis_on` / `hysteresis_off` thresholds.
 - **Anti-short-cycle protection** — minimum on/off durations and cooldown delay keep the igniter safe.
 - **Safety cut-off** — forces the stove off when the room temperature exceeds a configurable threshold.
-- **Optional power level control** — adjusts `fan_mode` or `preset_mode` on the underlying climate entity based on `ΔT` and temperature slope.
+- **Optional power level control** — adjusts `fan_mode` or `preset_mode` on a climate underlying based on `ΔT` and temperature slope.
 - **Boost** — temporarily raises power to maximum after a setpoint increase.
+- **Dry contact** — power control and boost are automatically inhibited without clearing their settings; they resume if the underlying entity becomes a climate again.
 - **Persistent state** — survives Home Assistant restarts.
+- **Dry contact** — automatically detects an underlying `switch`; ON/OFF is a request, not feedback about the flame or actual shutdown.
 - **HACS-compatible** — global defaults entry + per-thermostat overrides.
 
 ## Integration with Versatile Thermostat
@@ -39,9 +41,15 @@ Key features:
 The plugin relies on the public [vtherm_api](https://github.com/KipK/vtherm_api). Once installed:
 
 1. Configure Versatile Thermostat in **`over_switch`** mode.
-2. Set the underlying entity to your stove's `climate.*` entity.
-3. Configure `vswitch_on = "set_hvac_mode/hvac_mode:heat"` and `vswitch_off = "set_hvac_mode/hvac_mode:off"`.
+2. Choose your stove's `climate.*` entity or the native dry-contact `switch.*` as the underlying entity.
+3. For a climate underlying, configure `vswitch_on = "set_hvac_mode/hvac_mode:heat"` and `vswitch_off = "set_hvac_mode/hvac_mode:off"`. For a switch, use VTherm's native switch control; no intermediate climate entity is needed.
 4. Select **`pellet_regulation`** as the proportional function.
+
+This plugin always selects the VTherm `climate` entity, not the relay. The underlying type is detected automatically; setup, Options and reconfiguration forms show the dry-contact warning alongside the three duration settings.
+
+For a dry contact, `min_on_duration_min` must cover ignition and useful heating; `min_off_duration_min` plus `cooldown_duration_min` must cover shutdown and rest. Without a usable persisted timestamp, no artificial initial wait is imposed, so the user must account for operations performed before Home Assistant started. These are software guard-rails, not a hardware safety guarantee.
+
+**VTherm compatibility:** do not enable this path with VTherm 10.6.4. Its automatic repair can reverse passive adoption of an ON contact. Wait for a version implementing the contract tracked by [issue #2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223), and validate that version before use.
 
 ## Installation
 
