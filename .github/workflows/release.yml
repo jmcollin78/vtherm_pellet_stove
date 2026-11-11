@@ -3,7 +3,13 @@ name: Release
 on:
     push:
         tags:
-            - "[0-9]+.[0-9]+.[0-9]+"
+            - "[0-9]*.[0-9]*.[0-9]*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Tag to build and publish (for example 2.0.0.beta4)"
+                required: true
+                type: string
 
 permissions:
     contents: write
@@ -13,10 +19,12 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.inputs.tag || github.ref }}
 
             - name: "Set version number from trigger's tag"
               run: |
-                  yq -i -o json '.version="${{ github.ref_name }}"' \
+                  yq -i -o json '.version="${{ github.event.inputs.tag || github.ref_name }}"' \
                   "${{ github.workspace }}/custom_components/vtherm_pellet_stove/manifest.json"
 
             - name: Create ZIP
@@ -27,8 +35,8 @@ jobs:
             - name: Create Release
               uses: softprops/action-gh-release@v1
               with:
-                  tag_name: ${{ github.ref_name }}
-                  name: Release ${{ github.ref_name }}
+                  tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+                  name: Release ${{ github.event.inputs.tag || github.ref_name }}
                   draft: false
                   prerelease: true
                   generate_release_notes: true
