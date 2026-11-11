@@ -767,7 +767,9 @@ class PelletRegulationHandler:
         if len(underlying_list) != 1:
             return None
         entity_id = underlying_list[0]
-        if isinstance(entity_id, str) and entity_id.startswith("switch."):
+        if isinstance(entity_id, str) and entity_id.startswith(
+            ("switch.", "input_boolean.")
+        ):
             return entity_id
         return None
 

@@ -34,11 +34,11 @@ Constats tires du code et des tests existants :
 
 ### 1. Choisir le parcours depuis le sous-jacent, pas depuis une nouvelle option
 
-Identifier le cas d'un sous-jacent `switch` dans `underlying_entity_ids`, deja disponible sur le runtime VTherm. Pour les formulaires, suivre le `config_entry_id` de la cible dans l'entity registry HA puis lire `underlying_entity_ids` dans les donnees de ce `ConfigEntry`, sans lecture directe du stockage interne. Classer le domaine configure sans consulter l'etat instantane du sous-jacent : un `climate` generique ne prouve pas un retour Duepi. Reutiliser cette logique dans les formulaires et le runtime lorsque necessaire. Conserver l'observation Duepi existante pour le parcours climate ; ne pas introduire une hierarchie d'adaptateurs pour ces deux cas.
+Identifier les sous-jacents binaires de domaine `switch` ou `input_boolean` dans `underlying_entity_ids`, deja disponible sur le runtime VTherm. Un `switch` peut piloter une entree a contact sec physique ; un `input_boolean` represente seulement un etat logique de demande et ne fournit aucun retour physique sur le poele. Pour les formulaires, suivre le `config_entry_id` de la cible dans l'entity registry HA puis lire `underlying_entity_ids` dans les donnees de ce `ConfigEntry`, sans lecture directe du stockage interne. Classer le domaine configure sans consulter l'etat instantane du sous-jacent : un `climate` generique ne prouve pas un retour Duepi. Reutiliser cette logique dans les formulaires et le runtime lorsque necessaire. Conserver l'observation Duepi existante pour le parcours climate ; ne pas introduire une hierarchie d'adaptateurs pour ces deux cas.
 
 La configuration du plugin continue de cibler le climate VTherm : le selecteur de `config_flow.py` n'est pas le selecteur du poele. Un climate intermediaire serait inutile et ne fournirait pas les attributs Duepi manquants.
 
-La detection repose sur l'identifiant configure du sous-jacent, pas sur sa valeur ON/OFF ni sur la presence de son etat HA. Un switch indisponible doit donc toujours etre identifie comme switch. Ne pas memoriser un type choisi par l'utilisateur ni reutiliser aveuglement un ancien type : resoudre a nouveau la configuration lors de chaque ouverture d'Options ou de reconfiguration. Si cette resolution echoue, ne pas annoncer un retour physique fiable ; le domaine climate seul ne prouve pas qu'il s'agit d'un Duepi reconnu.
+La detection repose sur l'identifiant configure du sous-jacent, pas sur sa valeur ON/OFF ni sur la presence de son etat HA. Un sous-jacent binaire absent ou indisponible reste donc identifie par son domaine. Ne pas memoriser un type choisi par l'utilisateur ni reutiliser aveuglement un ancien type : resoudre a nouveau la configuration lors de chaque ouverture d'Options ou de reconfiguration. Si cette resolution echoue, ne pas annoncer un retour physique fiable ; le domaine climate seul ne prouve pas qu'il s'agit d'un Duepi reconnu.
 
 Le parcours initial par thermostat devient :
 
@@ -46,7 +46,7 @@ Le parcours initial par thermostat devient :
 Choix du VTherm --> lecture du sous-jacent --> reglages --> enregistrement
                                                   |
                                                   v
-                                avertissement si contact sec switch
+                       avertissement si sous-jacent binaire switch ou input_boolean
 ```
 
 Conserver temporairement la cible choisie dans le flow, puis afficher les reglages dans une seconde etape ; creer l'entree seulement apres leur validation. Ce decoupage permet d'afficher l'avertissement avant l'enregistrement, contrairement au formulaire unique actuel. Il ne change ni l'identite de l'entree, ni la prevention des doublons, ni le selecteur VTherm. La creation automatique de l'entree globale reste inchangee ; une entree globale sans cible ne doit pas etre classee arbitrairement comme Duepi.
@@ -76,25 +76,25 @@ Store charge --> dates restaurees --> mode VTherm restaure
                                premiere decision normale
 ```
 
-Dans la branche switch, effectuer l'adoption au startup sous la serialisation de controle existante, avant la premiere decision. Si le contact n'est pas encore connu, conserver une initialisation en attente jusqu'au premier etat connu ; ne pas autoriser de nouvel ON entre-temps. Les demandes prioritaires OFF ne sont pas subordonnees a cette autorisation ON.
+Dans la branche sous-jacent binaire, effectuer l'adoption au startup sous la serialisation de controle existante, avant la premiere decision. Si son etat n'est pas encore connu, conserver une initialisation en attente jusqu'au premier etat connu ; ne pas autoriser de nouvel ON entre-temps. Les demandes prioritaires OFF ne sont pas subordonnees a cette autorisation ON. Cette regle s'applique egalement a `input_boolean`, dont l'etat reste une demande logique et non une observation physique.
 
 L'adoption fixe la chauffe demandee selon le contact, sans ecrire une date a maintenant. Elle n'est executee qu'une fois pour ce demarrage : ne pas resynchroniser aveuglement le controleur sur chaque lecture HA, au risque d'annuler une transition dont le retour du relais n'est pas encore arrive.
 
-La reparation automatique de VTherm compare aussi l'etat HA du switch a son propre etat attendu. Dans la version VTherm 10.6.4 (commit `bdef348b579b14d306291bb89099be01d9d2bc12`), le switch conserve cet attendu dans `_is_on_part_running`, initialise a faux. Le code du `CycleScheduler` passe les transitions normales par `turn_on()` ou `turn_off()`, qui mettent a jour cet attendu apres la commande. Les tests amont `test_cycle_scheduler.py` (39 passes) et `test_repair_incorrect_state_manager.py` (1 passe) ont ete executes, mais utilisent des doubles pour les sous-jacents et ne prouvent pas cette synchronisation avec le vrai switch. `test_check_initial_state.py` passe aussi (39 passes) ; son test `UnderlyingSwitch` remplace `turn_off()` par un mock et verifie l'appel : avec VTherm OFF et le contact ON, `check_initial_state()` demande OFF, mais en mode heat avec le contact ON, il ne synchronise pas l'attendu.
+La reparation automatique de VTherm compare aussi l'etat HA du sous-jacent binaire a son propre etat attendu. Pour un `input_boolean`, le meme contrat de coherence ON/OFF doit s'appliquer, sans que son etat soit considere comme un retour physique. Dans la version VTherm 10.6.4 (commit `bdef348b579b14d306291bb89099be01d9d2bc12`), le switch conserve cet attendu dans `_is_on_part_running`, initialise a faux. Le code du `CycleScheduler` passe les transitions normales par `turn_on()` ou `turn_off()`, qui mettent a jour cet attendu apres la commande. Les tests amont `test_cycle_scheduler.py` (39 passes) et `test_repair_incorrect_state_manager.py` (1 passe) ont ete executes, mais utilisent des doubles pour les sous-jacents et ne prouvent pas cette synchronisation avec le vrai switch. `test_check_initial_state.py` passe aussi (39 passes) ; son test `UnderlyingSwitch` remplace `turn_off()` par un mock et verifie l'appel : avec VTherm OFF et le contact ON, `check_initial_state()` demande OFF, mais en mode heat avec le contact ON, il ne synchronise pas l'attendu.
 
-Le chemin d'adoption passive ON en mode heat reste donc incompatible avec `repair_incorrect_state` : apres son delai d'activation, `_is_on_part_running` peut rester faux alors que le switch est ON, et `check_and_repair()` commande alors OFF. Les tests existants ont ete executes dans un environnement temporaire propre avec Home Assistant 2026.11.0, Home Assistant precharge avant pytest et les plugins `pytest_homeassistant`, `pytest_asyncio` et, pour le scheduler, `pytest_freezer` explicitement charges. Ils ne constituent pas un test combine de l'adoption et de repair ; le comportement contradictoire decoule ici du code reel de ces deux classes.
+Le chemin d'adoption passive ON d'un sous-jacent binaire en mode heat reste donc incompatible avec `repair_incorrect_state` : apres son delai d'activation, `_is_on_part_running` peut rester faux alors que l'entite est ON, et `check_and_repair()` commande alors OFF. Les tests existants ont ete executes dans un environnement temporaire propre avec Home Assistant 2026.11.0, Home Assistant precharge avant pytest et les plugins `pytest_homeassistant`, `pytest_asyncio` et, pour le scheduler, `pytest_freezer` explicitement charges. Ils ne constituent pas un test combine de l'adoption et de repair ; le comportement contradictoire decoule ici du code reel de ces deux classes.
 
 Le code VTherm 10.6.4 ne fournit pas de contrat general d'adoption silencieuse. Pour poursuivre l'implementation, l'hypothese approuvee par l'utilisateur le 2026-11-10 est que VTherm fera evoluer son initialisation interne : au premier etat HA valide du switch, avant `check_initial_state()` et avant le premier controle, il initialisera `_is_on_part_running` une seule fois depuis `is_device_active`, sans emettre de commande. Le plugin ne lira ni ne modifiera ce champ prive. En mode OFF, le `check_initial_state()` existant pourra ensuite commander OFF et `turn_off()` remettra l'attendu a faux. Les etats absents, `unknown` ou `unavailable` ne seront pas adoptes ; l'initialisation attendra un etat valide. Cette hypothese est suivie par l'issue VTherm [#2223](https://github.com/jmcollin78/versatile_thermostat/issues/2223), tandis que [#2219](https://github.com/jmcollin78/versatile_thermostat/issues/2219) garde son perimetre distinct de protection parent-OFF. La tache 1.2 reste a confirmer sur une version amont contenant le changement ; la verification finale est reprise en 5.2.
 
-La correction actuelle `is_heating=True` avec VTherm OFF reste propre au parcours climate. Pour un switch, ne pas effacer d'abord l'etat ON du contact : cela pourrait masquer l'ouverture necessaire. Appliquer ensuite le mode VTherm avec un unique chemin de commande OFF.
+La correction actuelle `is_heating=True` avec VTherm OFF reste propre au parcours climate. Pour un sous-jacent binaire `switch` ou `input_boolean`, ne pas effacer d'abord l'etat ON : cela pourrait masquer l'ouverture necessaire. Appliquer ensuite le mode VTherm avec un unique chemin de commande OFF.
 
 ### 3. Conserver en priorite la date pertinente exploitable
 
-La date pertinente est `last_on_at` pour un contact ON, `last_off_at` pour un contact OFF. La presence des deux dates n'est pas requise.
+La date pertinente est `last_on_at` pour un sous-jacent binaire ON, `last_off_at` pour un sous-jacent binaire OFF, qu'il soit de domaine `switch` ou `input_boolean`. La presence des deux dates n'est pas requise.
 
 Definition retenue pour les tests : une date exploitable est une date ISO interpretable, normalisee en UTC si elle n'a pas de fuseau, non future au moment de la reprise et compatible avec la derniere transition connue. Si les deux dates sont valides, la date pertinente ne doit pas preceder la date opposee. Une date opposee absente ou illisible ne suffit pas a invalider la date pertinente valide. Le contact prime pour l'etat initial ; les dates ne constituent pas une preuve de l'etat physique.
 
-Valider les dates de la branche switch avant qu'une date illisible puisse faire echouer la restauration complete. Utiliser les parseurs de dates existants ou la bibliotheque standard et une copie des donnees chargees ; ne pas modifier directement les fichiers de stockage HA. Limiter cette tolerance aux dates utiles a ce changement, sans modifier la politique generale du parcours climate.
+Valider les dates de la branche sous-jacent binaire avant qu'une date illisible puisse faire echouer la restauration complete. Utiliser les parseurs de dates existants ou la bibliotheque standard et une copie des donnees chargees ; ne pas modifier directement les fichiers de stockage HA. Limiter cette tolerance aux dates utiles a ce changement, sans modifier la politique generale du parcours climate.
 
 | Etat adopte | Date exploitable | Echeance conservee |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ L'hypothese est que les dates chronologiquement compatibles retracent encore les
 
 ### 4. Reutiliser les garde-fous apres l'adoption
 
-Le comportement de `CycleGuard` n'a pas besoin d'une nouvelle formule : absence de date signifie autorisation temporelle immediate ; une transition decidee par le controleur renseigne ensuite la date normale. `next_action_allowed_at` et les phases derivent de ce meme etat.
+Le comportement de `CycleGuard` n'a pas besoin d'une nouvelle formule pour un sous-jacent binaire `switch` ou `input_boolean` : absence de date signifie autorisation temporelle immediate ; une transition decidee par le controleur renseigne ensuite la date normale. `next_action_allowed_at` et les phases derivent de ce meme etat.
 
 L'adoption ON sans date permet une extinction immediate, mais ne la commande pas si l'hysteresis demande de rester ON. L'adoption OFF sans date permet un allumage uniquement si la consigne, le mode VTherm, la temperature et l'etat disponible du contact le permettent.
 
@@ -116,7 +116,7 @@ Apres une transition pilotee, conserver les dates lors des maintiens, publicatio
 
 ### 5. Conserver la commande native VTherm et son proprietaire unique
 
-Pour une transition normale en mode heat, conserver `start_cycle` suivi de `cancel_cycle`. Un switch OFF peut autoriser ON ; un switch deja ON n'autorise pas une seconde activation. Les etats absents, inconnus, indisponibles ou non reconnus interdisent un nouvel ON, sans pretendre observer la flamme.
+Pour une transition normale en mode heat, conserver `start_cycle` suivi de `cancel_cycle`. Un sous-jacent binaire `switch` ou `input_boolean` explicitement OFF peut autoriser ON ; s'il est deja ON, il n'autorise pas une seconde activation. Les etats absents, inconnus, indisponibles ou non reconnus interdisent un nouvel ON, sans pretendre observer la flamme.
 
 Pour un arret manuel, conserver VTherm comme proprietaire de la commande OFF et ne pas ajouter un second appel de scheduler au meme changement de mode. Pour la securite thermique en mode heat, utiliser le chemin de transition deja existant. Ne pas contourner VTherm par un appel direct au service du relais.
 
@@ -124,17 +124,17 @@ Le test de contrat avec la version VTherm cible doit verifier trois cas precis :
 
 ### 6. Inhiber localement puissance et boost
 
-Conserver les options enregistrees et les regles de resolution globale/locale. Lors de la construction et de chaque mise a jour de configuration du controleur switch, forcer les capacites effectives de puissance et de boost a faux. La branche `_apply_power_level` ne doit pas etre appelee pour ce parcours.
+Conserver les options enregistrees et les regles de resolution globale/locale. Lors de la construction et de chaque mise a jour de configuration du controleur pour un sous-jacent binaire `switch` ou `input_boolean`, forcer les capacites effectives de puissance et de boost a faux. La branche `_apply_power_level` ne doit pas etre appelee pour ce parcours.
 
-Lors d'une restauration switch, neutraliser le niveau et le boost applicables au runtime sans effacer les dates de transition exploitables. Les diagnostics ne doivent afficher ni niveau applicable ni boost actif. Ne pas modifier les options globales, car d'autres thermostats climate peuvent les partager.
+Lors d'une restauration de sous-jacent binaire `switch` ou `input_boolean`, neutraliser le niveau et le boost applicables au runtime sans effacer les dates de transition exploitables. Les diagnostics ne doivent afficher ni niveau applicable ni boost actif. Ne pas modifier les options globales, car d'autres thermostats climate peuvent les partager.
 
 L'alternative consistant a demander seulement a l'utilisateur de decocher la puissance laisserait les valeurs par defaut et les mises a jour d'options produire des etats trompeurs ; elle est ecartee.
 
 ### 7. Etendre les tests et la documentation existants
 
-Adapter les helpers de `tests/test_handler.py` pour representer un switch sans attributs de climate, tout en conservant les fixtures Duepi et les assertions de non-regression. Reutiliser les fichiers existants pour le handler et les calculs purs d'echeance dans `tests/test_controller.py` et `tests/test_cycle_guard.py`.
+Adapter les helpers de `tests/test_handler.py` pour representer les sous-jacents `switch` et `input_boolean` sans attributs de climate, tout en conservant les fixtures Duepi et les assertions de non-regression. Reutiliser les fichiers existants pour le handler et les calculs purs d'echeance dans `tests/test_controller.py` et `tests/test_cycle_guard.py`.
 
-Regrouper les nouveaux tests de formulaire dans `tests/test_config_flow.py`, aucun fichier dedie a ces parcours n'existant actuellement. Verifier la selection puis les reglages sans creation prematuree d'entree, la detection d'un switch indisponible, la resolution renouvelee en Options et reconfiguration, l'absence de choix manuel et de case obligatoire, les traductions FR/EN et l'absence d'avertissement switch pour le Duepi reconnu. Conserver les contrats de cible, de doublon et de sauvegarde des options. L'ouverture de ces formulaires et l'affichage du message ne doivent ni commander le poele ni modifier ses dates.
+Regrouper les nouveaux tests de formulaire dans `tests/test_config_flow.py`, aucun fichier dedie a ces parcours n'existant actuellement. Verifier la selection puis les reglages sans creation prematuree d'entree, la detection des domaines `switch` et `input_boolean` meme si leur etat est indisponible, la resolution renouvelee en Options et reconfiguration, l'absence de choix manuel et de case obligatoire, les traductions FR/EN et l'absence d'avertissement contact sec pour le Duepi reconnu. Conserver les contrats de cible, de doublon et de sauvegarde des options. L'ouverture de ces formulaires et l'affichage du message ne doivent ni commander le poele ni modifier ses dates.
 
 Tester avec des dates deterministes les seuils avant, a et apres echeance, les historiques partiels, les relances repetees, les valeurs inconnues et l'absence de nouvelle commande lors d'un maintien restaure. Tester aussi les options de puissance actives par defaut, leur mise a jour et un ancien boost persiste.
 
@@ -155,7 +155,7 @@ Mettre a jour les README et les guides utilisateur et techniques dans les deux l
 
 ## Migration Plan
 
-1. Implementer le parcours switch sans changer les identifiants d'entites ni la version du Store. Les donnees existantes restent lisibles.
+1. Implementer le parcours binaire `switch`/`input_boolean` sans changer les identifiants d'entites ni la version du Store. Le `switch` peut piloter un contact physique ; `input_boolean` reste un etat logique sans retour physique. Les donnees existantes restent lisibles.
 2. Executer les tests locaux et le test de contrat VTherm avant publication, y compris avec la reparation automatique active ; si le contrat requis manque, attendre l'evolution VTherm suivie par l'issue #2223. Une verification materielle eventuelle reste distincte et sous controle de l'utilisateur.
-3. Configurer le switch comme sous-jacent natif `over_switch`, sans commandes `set_hvac_mode` pour ce contact. Garder la cible plugin sur le climate VTherm.
+3. Configurer le sous-jacent binaire `switch` ou `input_boolean` dans le parcours VTherm `over_switch`, sans commandes `set_hvac_mode` pour ce parcours. Seul un `switch` peut representer une entree a contact sec physique. Garder la cible plugin sur le climate VTherm.
 4. Pour revenir a une version ne supportant pas ce parcours, mettre d'abord VTherm sur OFF et laisser le poele effectuer son extinction. Ne pas compter sur cette ancienne version pour commander le switch ; conserver les dates et les donnees au lieu de les purger.

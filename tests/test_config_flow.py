@@ -83,6 +83,16 @@ def test_unavailable_switch_remains_classified_as_switch(monkeypatch):
     hass.states.get.assert_not_called()
 
 
+def test_input_boolean_is_classified_as_dry_contact(monkeypatch):
+    hass = _make_hass(monkeypatch, ["input_boolean.pellet_stove"])
+
+    assert (
+        resolve_underlying_domain(hass, "climate.pellet_thermostat")
+        == "input_boolean"
+    )
+    hass.states.get.assert_not_called()
+
+
 def test_unresolved_underlying_returns_none(monkeypatch):
     hass = _make_hass(monkeypatch, [])
 
@@ -95,8 +105,14 @@ def test_generic_climate_is_not_classified_as_duepi(monkeypatch):
     assert resolve_underlying_domain(hass, "climate.pellet_thermostat") == "climate"
 
 
-async def test_target_step_keeps_climate_selector_and_defers_entry_creation(monkeypatch):
-    hass = _make_hass(monkeypatch, ["switch.pellet_stove"])
+@pytest.mark.parametrize(
+    "underlying_entity",
+    ["switch.pellet_stove", "input_boolean.pellet_stove"],
+)
+async def test_target_step_keeps_climate_selector_and_defers_entry_creation(
+    monkeypatch, underlying_entity
+):
+    hass = _make_hass(monkeypatch, [underlying_entity])
     flow = _make_flow(hass)
     schema = build_target_schema()
     target_selector = next(
@@ -222,7 +238,7 @@ async def test_options_and_reconfigure_detect_replaced_underlying(monkeypatch):
 
     hass.config_entries.async_get_entry.return_value.data[
         "underlying_entity_ids"
-    ] = ["switch.pellet_stove"]
+    ] = ["input_boolean.pellet_stove"]
 
     result = await PelletStoveOptionsFlow.async_step_init(options_flow)
     assert result["step_id"] == "init_switch"

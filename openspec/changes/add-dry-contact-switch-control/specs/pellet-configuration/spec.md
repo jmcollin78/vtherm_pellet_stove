@@ -4,7 +4,7 @@
 
 ### Requirement: Parcours de configuration avec contact sec
 
-L'integration SHALL permettre de selectionner `pellet_regulation` pour un VTherm `over_switch` dont le sous-jacent est un `switch` commandant un contact sec. La cible de la configuration du plugin SHALL rester le `climate` VTherm, distinct du sous-jacent. Ce parcours SHALL ne pas exiger de creer un `climate` intermediaire ni de consulter l'historique Home Assistant du contact.
+L'integration SHALL permettre de selectionner `pellet_regulation` pour un VTherm `over_switch` dont le sous-jacent binaire est un `switch` commandant un contact sec ou un `input_boolean` representant une demande logique. La cible de la configuration du plugin SHALL rester le `climate` VTherm, distinct du sous-jacent. Ce parcours SHALL ne pas exiger de creer un `climate` intermediaire ni de consulter l'historique Home Assistant du contact.
 
 #### Scenario: Thermostat avec un vrai switch
 
@@ -15,7 +15,7 @@ L'integration SHALL permettre de selectionner `pellet_regulation` pour un VTherm
 
 ### Requirement: Detection automatique du type de sous-jacent
 
-Apres selection du VTherm, l'integration SHALL identifier le domaine de son sous-jacent depuis la configuration du thermostat, sans demander un choix manuel switch ou climate. Cette detection SHALL etre independante de la disponibilite instantanee du contact et reevaluee a l'ouverture des Options ou de la reconfiguration ciblees. Un climate generique ou un type non resolu SHALL ne pas etre presente comme un Duepi avec retour physique fiable.
+Apres selection du VTherm, l'integration SHALL determiner le domaine du sous-jacent depuis sa configuration, sans choix manuel. Elle SHALL classer `switch` et `input_boolean` comme binaires, independamment de leur etat courant, et refaire cette detection a l'ouverture des Options ou de la reconfiguration. Un `climate` generique ou un type non resolu SHALL ne pas etre presente comme un Duepi avec retour physique fiable.
 
 #### Scenario: Selection du thermostat et non du poele
 
@@ -24,15 +24,22 @@ Apres selection du VTherm, l'integration SHALL identifier le domaine de son sous
 - **THEN** le parcours detecte un contact sec sans demander le type de poele
 - **AND** le domaine climate du VTherm cible n'est pas confondu avec celui de son sous-jacent
 
-#### Scenario: Switch indisponible pendant la configuration
+#### Scenario: Sous-jacent input_boolean
 
-- **GIVEN** un sous-jacent switch identifie dans la configuration du VTherm mais actuellement indisponible
+- **GIVEN** un VTherm `over_switch` configure avec un `input_boolean`
+- **WHEN** l'utilisateur selectionne ce VTherm
+- **THEN** l'integration detecte le sous-jacent binaire et affiche le formulaire avec l'avertissement correspondant
+- **AND** l'etat de l'`input_boolean` n'est pas presente comme une preuve physique de flamme ou d'extinction
+
+#### Scenario: Sous-jacent binaire indisponible pendant la configuration
+
+- **GIVEN** un sous-jacent `switch` ou `input_boolean` identifie dans la configuration du VTherm mais actuellement indisponible
 - **WHEN** le formulaire de reglages est affiche
 - **THEN** le type switch reste detecte et son avertissement reste visible
 
 #### Scenario: Sous-jacent modifie depuis une precedente configuration
 
-- **GIVEN** un VTherm dont le sous-jacent a ete remplace par un switch
+- **GIVEN** un VTherm dont le sous-jacent a ete remplace par un `switch` ou un `input_boolean`
 - **WHEN** l'utilisateur ouvre ses Options ou sa reconfiguration pellet
 - **THEN** le type courant est detecte sans reutiliser aveuglement un ancien type climate
 
@@ -44,11 +51,11 @@ Apres selection du VTherm, l'integration SHALL identifier le domaine de son sous
 
 ### Requirement: Avertissement de contact sec dans les formulaires
 
-Pour un switch detecte, les formulaires de reglages initiaux, d'Options et de reconfiguration par thermostat SHALL afficher avant enregistrement un avertissement explicite FR/EN : aucun retour sur l'etat reel du poele, ON/OFF exprime seulement une demande, et les delais doivent couvrir allumage, chauffe utile, extinction et repos. L'avertissement SHALL accompagner les reglages de duree sans exiger une case de confirmation supplementaire.
+Pour un sous-jacent `switch` ou `input_boolean`, les formulaires initiaux, d'Options et de reconfiguration SHALL afficher avant enregistrement un avertissement FR/EN indiquant que ON/OFF est une demande sans retour physique. L'avertissement SHALL accompagner les reglages de duree sans case de confirmation obligatoire.
 
-#### Scenario: Reglages initiaux d'un contact sec
+#### Scenario: Reglages initiaux d'un sous-jacent binaire
 
-- **WHEN** le type switch est detecte apres le choix du VTherm
+- **WHEN** le domaine `switch` ou `input_boolean` est detecte apres le choix du VTherm
 - **THEN** l'utilisateur voit l'avertissement avant de valider les durees
 - **AND** le message explique que le minimum de marche inclut l'allumage et la chauffe utile
 - **AND** il explique que le minimum d'arret additionne au refroidissement couvre l'extinction et le repos
@@ -69,12 +76,12 @@ Pour un switch detecte, les formulaires de reglages initiaux, d'Options et de re
 
 #### Scenario: Traductions des formulaires
 
-- **WHEN** les formulaires du parcours switch sont utilises en francais ou en anglais
+- **WHEN** les formulaires du parcours sous-jacent binaire sont utilises en francais ou en anglais
 - **THEN** l'avertissement est disponible dans la langue selectionnee avec la meme signification
 
 ### Requirement: Documentation des temporisations de contact sec
 
-La documentation utilisateur FR/EN SHALL expliquer que le minimum de marche inclut le demarrage et la chauffe utile, et que le minimum d'arret additionne au refroidissement couvre l'extinction et le repos. Ces delais SHALL etre presentes comme comptes depuis les demandes de transition, non depuis une observation physique. Aucun reglage supplementaire de delai SHALL etre requis pour ce parcours.
+La documentation utilisateur FR/EN SHALL expliquer les trois durees et preciser qu'elles sont comptees depuis les demandes de transition, non depuis une observation physique. Pour `input_boolean`, elle SHALL preciser que l'etat est logique, non physique. Aucun delai supplementaire SHALL etre requis.
 
 #### Scenario: Reglage sans retour physique
 
@@ -82,6 +89,12 @@ La documentation utilisateur FR/EN SHALL expliquer que le minimum de marche incl
 - **THEN** il trouve la signification des trois durees existantes et de leur point de depart
 - **AND** la documentation distingue le contact sec d'une coupure d'alimentation secteur
 - **AND** elle explique que le switch ne permet ni de confirmer la flamme ni de detecter un echec d'allumage
+
+#### Scenario: Sous-jacent input_boolean dans la documentation
+
+- **WHEN** l'utilisateur consulte la documentation du parcours `input_boolean`
+- **THEN** il trouve la distinction entre l'etat logique de l'entite et un contact physique
+- **AND** il est averti que cet etat ne confirme ni la flamme ni l'extinction effective
 
 ### Requirement: Documentation de la reprise et de la responsabilite initiale
 

@@ -4,7 +4,7 @@
 
 ### Requirement: Allumage automatique conditionne par l'observation
 
-Pour un sous-jacent `climate`, le handler SHALL autoriser une transition automatique OFF vers ON uniquement si son observation conclut explicitement a un etat non chauffant. Une observation inconnue, indisponible, contradictoire ou deja chauffante SHALL bloquer cette transition avec `physical_state_not_confirmed_off`. Pour un contact sec `switch`, l'autorisation SHALL suivre l'etat du contact decrit ci-dessous, sans exiger d'observation physique.
+Pour un sous-jacent `climate`, le handler SHALL autoriser OFF vers ON seulement si l'observation confirme un etat non chauffant. Une observation inconnue, indisponible, contradictoire ou chauffante SHALL bloquer l'allumage avec `physical_state_not_confirmed_off`. Pour un sous-jacent binaire `switch` ou `input_boolean`, l'autorisation SHALL suivre son etat, sans exiger de retour physique.
 
 #### Scenario: Retour d'etat inconnu
 
@@ -22,13 +22,19 @@ Pour un sous-jacent `climate`, le handler SHALL autoriser une transition automat
 
 ### Requirement: Autorisation d'allumage par contact sec
 
-Pour un sous-jacent `switch`, l'integration SHALL autoriser un nouvel allumage automatique seulement si le contact est explicitement `off` et si les autres regles de regulation l'autorisent. Un contact absent, `unknown`, `unavailable`, dans un etat non reconnu ou deja `on` SHALL bloquer un nouvel allumage. Aucun attribut `burner_status` ou `hvac_action` SHALL etre requis.
+Pour un sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL autoriser un nouvel allumage automatique seulement si son etat est explicitement `off` et si les autres regles de regulation l'autorisent. Un etat absent, inconnu, indisponible, non reconnu ou deja `on` SHALL bloquer l'allumage. Aucun attribut `burner_status` ou `hvac_action` SHALL etre requis.
 
 #### Scenario: Contact arrete sans attribut de poele
 
 - **GIVEN** un contact `off`, une demande de chauffe et des delais satisfaits
 - **WHEN** le controle est execute sans attribut de retour physique
 - **THEN** un allumage peut etre demande via VTherm
+
+#### Scenario: input_boolean explicitement OFF
+
+- **GIVEN** un sous-jacent `input_boolean` `off`, une demande de chauffe et des delais satisfaits
+- **WHEN** le controle est execute
+- **THEN** un allumage peut etre demande via VTherm sans pretendre observer la flamme
 
 #### Scenario: Contact indisponible
 
@@ -50,7 +56,7 @@ Pour un sous-jacent `switch`, l'integration SHALL autoriser un nouvel allumage a
 
 ### Requirement: Commandes de contact sur transition uniquement
 
-L'integration SHALL demander via VTherm l'activation ou l'ouverture du contact lors d'une transition de regulation, sans cycles marche/arret periodiques. Un maintien ou la seule restauration SHALL ne pas produire de commande supplementaire. Une transition demandee pour une raison de regulation apres restauration SHALL rester possible. Une commande de contact SHALL ne pas etre presentee comme une confirmation physique.
+Pour un sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL demander via VTherm l'activation ou l'ouverture lors d'une transition de regulation, sans cycles marche/arret periodiques. Un maintien ou la seule restauration SHALL ne pas produire de commande supplementaire. Une transition de regulation apres restauration SHALL rester possible. Une commande SHALL ne pas etre presentee comme une confirmation physique.
 
 #### Scenario: Transition de regulation vers ON
 
@@ -74,7 +80,7 @@ L'integration SHALL demander via VTherm l'activation ou l'ouverture du contact l
 
 ### Requirement: Priorites d'ouverture du contact
 
-Un arret manuel de VTherm ou une securite haute SHALL demander l'ouverture du contact sans attendre le minimum de marche. Le chemin VTherm et le plugin SHALL ne pas doubler cette commande pour une meme transition. Cette regle SHALL aussi s'appliquer a un contact initialement ON sans historique exploitable. L'extinction progressive SHALL rester a la charge du poele.
+Pour un sous-jacent binaire `switch` ou `input_boolean`, un arret manuel de VTherm ou une securite haute SHALL demander l'ouverture sans attendre le minimum de marche. VTherm et le plugin SHALL ne pas doubler la commande pour une transition. Cette regle SHALL aussi s'appliquer si l'etat initial est ON sans historique exploitable. L'extinction progressive SHALL rester a la charge du poele.
 
 #### Scenario: Arret manuel pendant la marche minimale
 
@@ -97,7 +103,7 @@ Un arret manuel de VTherm ou une securite haute SHALL demander l'ouverture du co
 
 ### Requirement: Coherence avec la reparation automatique VTherm
 
-Le plugin SHALL maintenir l'etat attendu par la reparation VTherm coherent avec toute adoption ou transition du switch. La reparation SHALL NOT commander l'etat oppose. Le plugin SHALL NOT desactiver repair ni modifier un etat prive ; toute synchronisation SHALL utiliser un contrat public. Sans contrat compatible, l'implementation SHALL attendre l'evolution suivie par l'issue VTherm #2223. Le garde-fou parent OFF de #2219 SHALL rester intact.
+Le plugin SHALL maintenir l'etat attendu par la reparation VTherm coherent avec toute adoption ou transition d'un sous-jacent binaire `switch` ou `input_boolean`. La reparation SHALL NOT commander l'etat oppose. Le plugin SHALL NOT desactiver repair ni modifier un etat prive ; toute synchronisation SHALL utiliser un contrat public. Sans contrat compatible, l'implementation SHALL attendre l'evolution suivie par l'issue VTherm #2223. Le garde-fou parent OFF de #2219 SHALL rester intact.
 
 #### Scenario: Adoption ON avec reparation active
 
@@ -110,3 +116,9 @@ Le plugin SHALL maintenir l'etat attendu par la reparation VTherm coherent avec 
 - **GIVEN** un contact dont l'etat adopte est coherent avec l'etat attendu par VTherm
 - **WHEN** l'integration demande une transition ON ou OFF puis que la reparation devient eligible
 - **THEN** la reparation ne renverse pas cette transition et n'emet pas de commande contradictoire
+
+#### Scenario: Adoption input_boolean avec reparation active
+
+- **GIVEN** un sous-jacent `input_boolean` `on`, un VTherm en mode `heat` et `repair_incorrect_state` active
+- **WHEN** l'integration adopte l'etat logique et que la reparation devient eligible
+- **THEN** la reparation ne demande pas l'etat oppose au seul motif que la commande vient d'un `input_boolean`

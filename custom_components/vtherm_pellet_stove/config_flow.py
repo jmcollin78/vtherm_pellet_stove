@@ -31,6 +31,7 @@ from .const import (
 
 _VTHERM_DOMAIN = "versatile_thermostat"
 _CONF_UNDERLYING_LIST = "underlying_entity_ids"
+_DRY_CONTACT_DOMAINS = {"switch", "input_boolean"}
 
 
 def _resolve_underlying_domain_from_entry(hass: Any, entry_id: str) -> str | None:
@@ -49,7 +50,7 @@ def _resolve_underlying_domain_from_entry(hass: Any, entry_id: str) -> str | Non
     domain, separator, object_id = entity_id.partition(".")
     if not separator or not domain or not object_id:
         return None
-    return domain if domain in {CLIMATE_DOMAIN, "switch"} else None
+    return domain if domain in {CLIMATE_DOMAIN} | _DRY_CONTACT_DOMAINS else None
 
 
 def resolve_underlying_domain(hass: Any, target_entity_id: str) -> str | None:
@@ -271,7 +272,7 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(title=title, data=data)
 
         switch_underlying = (
-            resolve_underlying_domain(self.hass, entity_id) == "switch"
+            resolve_underlying_domain(self.hass, entity_id) in _DRY_CONTACT_DOMAINS
         )
         return self.async_show_form(
             step_id=(
@@ -307,9 +308,12 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
 
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(entry.options or entry.data)
-        switch_underlying = resolve_underlying_domain_by_unique_id(
-            self.hass, entry.data.get(CONF_TARGET_VTHERM, "")
-        ) == "switch"
+        switch_underlying = (
+            resolve_underlying_domain_by_unique_id(
+                self.hass, entry.data.get(CONF_TARGET_VTHERM, "")
+            )
+            in _DRY_CONTACT_DOMAINS
+        )
         return self.async_show_form(
             step_id="reconfigure_switch" if switch_underlying else "reconfigure",
             data_schema=build_options_schema(defaults),
@@ -335,10 +339,13 @@ class PelletStoveOptionsFlow(OptionsFlow):
 
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
-        switch_underlying = resolve_underlying_domain_by_unique_id(
-            self.hass,
-            self._config_entry.data.get(CONF_TARGET_VTHERM, ""),
-        ) == "switch"
+        switch_underlying = (
+            resolve_underlying_domain_by_unique_id(
+                self.hass,
+                self._config_entry.data.get(CONF_TARGET_VTHERM, ""),
+            )
+            in _DRY_CONTACT_DOMAINS
+        )
         return self.async_show_form(
             step_id="init_switch" if switch_underlying else "init",
             data_schema=build_options_schema(defaults),

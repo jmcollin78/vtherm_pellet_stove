@@ -371,8 +371,9 @@ async def test_unknown_physical_state_blocks_automatic_ignition():
         ("missing", False),
     ],
 )
+@pytest.mark.parametrize("entity_domain", ["switch", "input_boolean"])
 async def test_switch_automatic_ignition_requires_explicit_off_contact(
-    contact_state, turn_on_allowed
+    entity_domain, contact_state, turn_on_allowed
 ):
     hass = _make_hass()
     thermostat = _make_thermostat(
@@ -380,7 +381,7 @@ async def test_switch_automatic_ignition_requires_explicit_off_contact(
         target_temperature=20.0,
         current_temperature=18.0,
         vtherm_hvac_mode="heat",
-        underlying_list=["switch.pellet_stove"],
+        underlying_list=[f"{entity_domain}.pellet_stove"],
         underlying_state=contact_state if contact_state != "missing" else "off",
     )
     if contact_state == "missing":
@@ -1537,18 +1538,19 @@ class TestScenario10RestoreAfterRestart:
 
         assert handler._controller.is_heating is False
 
+    @pytest.mark.parametrize("entity_domain", ["switch", "input_boolean"])
     @pytest.mark.parametrize(
         ("contact_state", "expected_heating"),
         [("on", True), ("off", False)],
     )
     async def test_switch_startup_adopts_without_dates_or_commands(
-        self, contact_state, expected_heating
+        self, entity_domain, contact_state, expected_heating
     ):
         hass = _make_hass()
         thermostat = _make_thermostat(
             hass,
             vtherm_hvac_mode="heat",
-            underlying_list=["switch.pellet_stove"],
+            underlying_list=[f"{entity_domain}.pellet_stove"],
             underlying_state=contact_state,
         )
         handler = PelletRegulationHandler(thermostat)

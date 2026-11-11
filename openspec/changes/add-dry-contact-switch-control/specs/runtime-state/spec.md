@@ -4,7 +4,7 @@
 
 ### Requirement: Sauvegarde et restauration par thermostat
 
-Le handler SHALL restaurer les champs du State Model lors de son ajout a HA si le Store contient des donnees. A chaque publication d'un resultat de controle, il SHALL sauvegarder l'etat courant. Sans donnees, l'ajout SHALL conserver l'etat initial arrete sans dates. Au startup d'un contact sec, l'etat SHALL ensuite etre initialise depuis le switch connu, en conservant les dates restaurees exploitables pour les garde-fous.
+Le handler SHALL restaurer les champs du State Model lors de son ajout a HA si le Store contient des donnees. A chaque publication d'un resultat de controle, il SHALL sauvegarder l'etat courant. Sans donnees, l'ajout SHALL conserver l'etat initial arrete sans dates. Au startup d'un sous-jacent binaire `switch` ou `input_boolean`, l'etat SHALL ensuite etre initialise depuis son etat connu, en conservant les dates restaurees exploitables pour les garde-fous.
 
 #### Scenario: Redemarrage pendant la chauffe
 
@@ -16,11 +16,11 @@ Le handler SHALL restaurer les champs du State Model lors de son ajout a HA si l
 
 - **WHEN** le Store est vide lors de l'ajout du handler
 - **THEN** `is_heating` reste faux et les dates de transition restent nulles
-- **AND** pour un contact sec, cet etat provisoire ne remplace pas l'adoption du switch au startup
+- **AND** pour un sous-jacent binaire, cet etat provisoire ne remplace pas son adoption au startup
 
 ### Requirement: Correction d'une chauffe restauree avec VTherm OFF
 
-Pour un sous-jacent `climate`, au startup apres restauration du mode VTherm, le handler SHALL corriger `is_heating = true` en faux si VTherm est sur OFF, sans remplacer `last_off_at` par maintenant. Cette correction SHALL ne pas etre faite lors de l'ajout a HA. Pour un contact sec, le startup SHALL adopter l'etat connu du switch et appliquer le mode VTherm sans masquer une ouverture necessaire du contact.
+Pour un sous-jacent `climate`, au startup apres restauration du mode VTherm, le handler SHALL corriger `is_heating = true` en faux si VTherm est sur OFF, sans remplacer `last_off_at` par maintenant. Cette correction SHALL ne pas etre faite lors de l'ajout a HA. Pour un sous-jacent binaire `switch` ou `input_boolean`, le startup SHALL adopter son etat connu et appliquer le mode VTherm sans masquer une ouverture necessaire.
 
 #### Scenario: Historique de chauffe perime
 
@@ -34,9 +34,9 @@ Pour un sous-jacent `climate`, au startup apres restauration du mode VTherm, le 
 - **WHEN** le startup corrige l'etat
 - **THEN** l'ancienne date d'arret est conservee
 
-#### Scenario: Contact deja ouvert au retour de HA
+#### Scenario: Sous-jacent binaire deja OFF au retour de HA
 
-- **GIVEN** un contact `off`, VTherm sur OFF et une date d'arret restauree exploitable
+- **GIVEN** un sous-jacent `switch` ou `input_boolean` `off`, VTherm sur OFF et une date d'arret restauree exploitable
 - **WHEN** le startup adopte l'etat du contact
 - **THEN** la date d'arret est conservee sans nouvelle commande OFF ni remise a zero du delai
 
@@ -73,7 +73,7 @@ Pour un sous-jacent `climate`, au startup apres restauration du mode VTherm, le 
 
 ### Requirement: Adoption initiale du contact sans preuve physique
 
-Au demarrage du parcours contact sec, l'integration SHALL adopter le premier etat connu `on` ou `off` comme etat de demande de chauffe. Cette adoption SHALL preceder la premiere decision automatique et ne pas constituer une nouvelle transition datee. Les phases et diagnostics SHALL rester des estimations logicielles, sans confirmation de flamme ou d'extinction effective.
+Au demarrage du parcours sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL adopter le premier etat connu `on` ou `off` comme etat de demande de chauffe. Cette adoption SHALL preceder la premiere decision automatique et ne pas constituer une nouvelle transition datee. Les phases et diagnostics SHALL rester des estimations logicielles, sans confirmation de flamme ou d'extinction effective.
 
 #### Scenario: Contact actif sans Store
 
@@ -88,6 +88,13 @@ Au demarrage du parcours contact sec, l'integration SHALL adopter le premier eta
 - **WHEN** l'initialisation du contact s'execute
 - **THEN** l'arret est adopte sans commande OFF et sans date d'arret inventee
 - **AND** le minimum d'arret et le refroidissement ne retardent pas un allumage autrement autorise
+
+#### Scenario: Adoption d'un input_boolean
+
+- **GIVEN** un sous-jacent `input_boolean` connu `on` ou `off` et un Store vide
+- **WHEN** l'initialisation du sous-jacent binaire s'execute
+- **THEN** son etat logique est adopte sans commande ni date de transition inventee
+- **AND** cet etat ne confirme pas la flamme ou l'extinction physique
 
 #### Scenario: Contact initialement indisponible
 
@@ -104,7 +111,7 @@ Au demarrage du parcours contact sec, l'integration SHALL adopter le premier eta
 
 ### Requirement: Priorite de la date exploitable de l'etat courant
 
-Pour un contact connu, l'integration SHALL utiliser en priorite la date restauree exploitable correspondant a cet etat : `last_on_at` pour ON, `last_off_at` pour OFF. L'absence de l'autre date SHALL ne pas invalider celle-ci. Une date exploitable SHALL etre interpretable, non future et coherente avec l'etat adopte et la chronologie connue. La duree de l'arret de HA SHALL compter dans le temps ecoule.
+Pour un sous-jacent binaire `switch` ou `input_boolean` connu, l'integration SHALL utiliser en priorite la date restauree exploitable correspondant a son etat : `last_on_at` pour ON, `last_off_at` pour OFF. L'absence de l'autre date SHALL ne pas invalider celle-ci. Une date exploitable SHALL etre interpretable, non future et coherente avec l'etat adopte et la chronologie connue. La duree de l'arret de HA SHALL compter dans le temps ecoule.
 
 #### Scenario: Reprise ON avec historique partiel
 
@@ -126,7 +133,7 @@ Pour un contact connu, l'integration SHALL utiliser en priorite la date restaure
 
 ### Requirement: Initialisation sans date exploitable et sans attente artificielle
 
-Sans date restauree exploitable pour l'etat courant du contact, l'integration SHALL considerer le delai de cet etat deja satisfait et exposer une echeance nulle. Elle SHALL ne pas creer une date a maintenant ni reconstituer des manoeuvres a partir du Recorder ou de l'age de l'etat HA. Cette exception SHALL ne pas supprimer une date exploitable ni contourner les autres regles de regulation.
+Sans date restauree exploitable pour l'etat courant d'un sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL considerer le delai de cet etat deja satisfait et exposer une echeance nulle. Elle SHALL ne pas creer une date a maintenant ni reconstituer des manoeuvres a partir du Recorder ou de l'age de l'etat HA. Cette exception SHALL ne pas supprimer une date exploitable ni contourner les autres regles de regulation.
 
 #### Scenario: Date pertinente absente
 
@@ -143,7 +150,7 @@ Sans date restauree exploitable pour l'etat courant du contact, l'integration SH
 
 ### Requirement: Reprise des garde-fous apres une transition pilotee
 
-Apres une transition pilotee, l'integration SHALL dater la nouvelle demande ON ou OFF et appliquer les temporisations normales a partir de cette date. Une simple adoption, un maintien, une publication ou une relance SHALL ne pas modifier ces dates. L'exception initiale sans historique SHALL ne pas neutraliser les garde-fous des transitions suivantes.
+Apres une transition pilotee d'un sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL dater la nouvelle demande ON ou OFF et appliquer les temporisations normales a partir de cette date. Une simple adoption, un maintien, une publication ou une relance SHALL ne pas modifier ces dates. L'exception initiale sans historique SHALL ne pas neutraliser les garde-fous des transitions suivantes.
 
 #### Scenario: Premier allumage apres adoption OFF sans date
 
