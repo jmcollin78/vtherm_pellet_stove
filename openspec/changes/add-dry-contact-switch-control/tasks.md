@@ -23,7 +23,7 @@
 ## 3. Autorisation et commandes du contact
 
 - [x] 3.1 Ajouter au handler l'autorisation ON fondee sur l'etat explicitement OFF d'un `switch` ou `input_boolean`, sans exiger d'attribut Duepi ; verifier OFF autorise, ON deja actif et etat non reconnu, tout en conservant les tests climate.
-- [ ] 3.2 Conserver les commandes sur transition via VTherm pour `switch` et `input_boolean` ; verifier une commande par transition ON/OFF, sans repetition en maintien. Avec le contrat VTherm cible, verifier que `repair` active ne renverse pas une transition apres son delai d'activation.
+- [x] 3.2 Conserver les commandes sur transition via VTherm pour `switch` et `input_boolean` ; verifier une commande par transition ON/OFF, sans repetition en maintien. Avec le contrat VTherm cible, verifier que `repair` active ne renverse pas une transition apres son delai d'activation.
 - [ ] 3.3 Adapter le startup des sous-jacents `switch` et `input_boolean` sans appliquer aveuglement la correction climate ; verifier les demandes OFF uniques avec VTherm OFF et la coherence ulterieure de `repair` selon le contrat 1.2.
 - [x] 3.4 Verifier l'arret manuel et la securite thermique pour les sous-jacents binaires sans attendre le minimum de marche, y compris apres adoption ON sans historique ; conserver les priorites d'arret existantes.
 - [x] 3.5 Mettre a jour les README et les guides utilisateur FR/EN avec les sous-jacents binaires `switch` et `input_boolean`, leur detection, l'avertissement des trois formulaires, les durees et la responsabilite de l'utilisateur sans historique exploitable.

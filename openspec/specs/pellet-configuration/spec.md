@@ -10,21 +10,21 @@ est limitee : voir [les observations](../../observations.md).
 
 ## Parameters
 
-| Parametre | Defaut | Selecteur du formulaire |
-| --- | --- | --- |
-| `hysteresis_on` | 0.5 | nombre 0 a 5, pas 0.01 |
-| `hysteresis_off` | 0.3 | nombre 0 a 5, pas 0.01 |
-| `min_on_percent` | 0.0 | nombre 0 a 1, pas 0.01 |
-| `max_on_percent` | 1.0 | nombre 0 a 1, pas 0.01 |
-| `min_on_duration_min` | 30 | entier 0 a 240 minutes |
-| `min_off_duration_min` | 20 | entier 0 a 240 minutes |
-| `cooldown_duration_min` | 5 | entier 0 a 60 minutes |
-| `safety_room_temp` | 26.0 | nombre 15 a 40, pas 0.1 |
-| `power_control_enabled` | true | booleen |
-| `power_control_attribute` | `fan_mode` | choix `fan_mode` ou `preset_mode` |
-| `power_default_level_index` | 2 | entier 0 a 10 |
-| `power_boost_enabled` | true | booleen |
-| `power_boost_duration_min` | 15 | entier 0 a 120 minutes |
+| Parametre                   | Defaut     | Selecteur du formulaire           |
+| --------------------------- | ---------- | --------------------------------- |
+| `hysteresis_on`             | 0.5        | nombre 0 a 5, pas 0.01            |
+| `hysteresis_off`            | 0.3        | nombre 0 a 5, pas 0.01            |
+| `min_on_percent`            | 0.0        | nombre 0 a 1, pas 0.01            |
+| `max_on_percent`            | 1.0        | nombre 0 a 1, pas 0.01            |
+| `min_on_duration_min`       | 30         | entier 0 a 240 minutes            |
+| `min_off_duration_min`      | 20         | entier 0 a 240 minutes            |
+| `cooldown_duration_min`     | 5          | entier 0 a 60 minutes             |
+| `safety_room_temp`          | 26.0       | nombre 15 a 40, pas 0.1           |
+| `power_control_enabled`     | true       | booleen                           |
+| `power_control_attribute`   | `fan_mode` | choix `fan_mode` ou `preset_mode` |
+| `power_default_level_index` | 2          | entier 0 a 10                     |
+| `power_boost_enabled`       | true       | booleen                           |
+| `power_boost_duration_min`  | 15         | entier 0 a 120 minutes            |
 
 La liste integree `power_levels` est `['1', '2', '3', '4', '5']`.
 Son absence du formulaire est une observation, pas une exigence de restriction.
@@ -275,6 +275,115 @@ reglages SHALL ne pas retenter cette notification.
 - **WHEN** la publication de l'evenement leve une exception apres application des reglages
 - **THEN** l'erreur est journalisee, les reglages restent appliques et la mise a jour retourne vrai si le controle a reussi
 - **AND** une application identique ne retente pas la notification
+
+### Requirement: Parcours de configuration avec contact sec
+
+L'integration SHALL permettre de selectionner `pellet_regulation` pour un VTherm `over_switch` dont le sous-jacent binaire est un `switch` commandant un contact sec ou un `input_boolean` representant une demande logique. La cible de la configuration du plugin SHALL rester le `climate` VTherm, distinct du sous-jacent. Ce parcours SHALL ne pas exiger de creer un `climate` intermediaire ni de consulter l'historique Home Assistant du contact.
+
+#### Scenario: Thermostat avec un vrai switch
+
+- **GIVEN** un VTherm `over_switch` configure avec un `switch` de contact sec
+- **WHEN** l'utilisateur lui associe les reglages pellet
+- **THEN** la cible du plugin reste le thermostat VTherm et les commandes visent le switch par VTherm
+- **AND** les commandes personnalisees `set_hvac_mode` propres au parcours climate ne sont pas requises
+
+### Requirement: Detection automatique du type de sous-jacent
+
+Apres selection du VTherm, l'integration SHALL determiner le domaine du sous-jacent depuis sa configuration, sans choix manuel. Elle SHALL classer `switch` et `input_boolean` comme binaires, independamment de leur etat courant, et refaire cette detection a l'ouverture des Options ou de la reconfiguration. Un `climate` generique ou un type non resolu SHALL ne pas etre presente comme un Duepi avec retour physique fiable.
+
+#### Scenario: Selection du thermostat et non du poele
+
+- **GIVEN** un VTherm climate dont la configuration designe un sous-jacent switch
+- **WHEN** l'utilisateur selectionne ce VTherm
+- **THEN** le parcours detecte un contact sec sans demander le type de poele
+- **AND** le domaine climate du VTherm cible n'est pas confondu avec celui de son sous-jacent
+
+#### Scenario: Sous-jacent input_boolean
+
+- **GIVEN** un VTherm `over_switch` configure avec un `input_boolean`
+- **WHEN** l'utilisateur selectionne ce VTherm
+- **THEN** l'integration detecte le sous-jacent binaire et affiche le formulaire avec l'avertissement correspondant
+- **AND** l'etat de l'`input_boolean` n'est pas presente comme une preuve physique de flamme ou d'extinction
+
+#### Scenario: Sous-jacent binaire indisponible pendant la configuration
+
+- **GIVEN** un sous-jacent `switch` ou `input_boolean` identifie dans la configuration du VTherm mais actuellement indisponible
+- **WHEN** le formulaire de reglages est affiche
+- **THEN** le type switch reste detecte et son avertissement reste visible
+
+#### Scenario: Sous-jacent modifie depuis une precedente configuration
+
+- **GIVEN** un VTherm dont le sous-jacent a ete remplace par un `switch` ou un `input_boolean`
+- **WHEN** l'utilisateur ouvre ses Options ou sa reconfiguration pellet
+- **THEN** le type courant est detecte sans reutiliser aveuglement un ancien type climate
+
+#### Scenario: Retour physique non etabli
+
+- **GIVEN** un climate generique ou une configuration dont le type ne peut pas etre resolu
+- **WHEN** le parcours affiche les informations de configuration
+- **THEN** il n'affirme pas qu'un retour d'etat physique Duepi est disponible
+
+### Requirement: Avertissement de contact sec dans les formulaires
+
+Pour un sous-jacent `switch` ou `input_boolean`, les formulaires initiaux, d'Options et de reconfiguration SHALL afficher avant enregistrement un avertissement FR/EN indiquant que ON/OFF est une demande sans retour physique. L'avertissement SHALL accompagner les reglages de duree sans case de confirmation obligatoire.
+
+#### Scenario: Reglages initiaux d'un sous-jacent binaire
+
+- **WHEN** le domaine `switch` ou `input_boolean` est detecte apres le choix du VTherm
+- **THEN** l'utilisateur voit l'avertissement avant de valider les durees
+- **AND** le message explique que le minimum de marche inclut l'allumage et la chauffe utile
+- **AND** il explique que le minimum d'arret additionne au refroidissement couvre l'extinction et le repos
+
+#### Scenario: Modification ulterieure des delais
+
+- **GIVEN** une entree pellet ciblant un VTherm avec contact sec
+- **WHEN** l'utilisateur ouvre les Options ou la reconfiguration
+- **THEN** l'avertissement est de nouveau visible avec les champs de duree
+- **AND** aucune case d'acceptation obligatoire n'est ajoutee
+
+#### Scenario: Duepi avec retour d'etat reconnu
+
+- **GIVEN** un sous-jacent climate Duepi avec retour d'etat reconnu
+- **WHEN** ses reglages pellet sont affiches
+- **THEN** l'avertissement propre au contact sec n'est pas affiche
+- **AND** les reglages anti-court-cycle restent disponibles
+
+#### Scenario: Traductions des formulaires
+
+- **WHEN** les formulaires du parcours sous-jacent binaire sont utilises en francais ou en anglais
+- **THEN** l'avertissement est disponible dans la langue selectionnee avec la meme signification
+
+### Requirement: Documentation des temporisations de contact sec
+
+La documentation utilisateur FR/EN SHALL expliquer les trois durees et preciser qu'elles sont comptees depuis les demandes de transition, non depuis une observation physique. Pour `input_boolean`, elle SHALL preciser que l'etat est logique, non physique. Aucun delai supplementaire SHALL etre requis.
+
+#### Scenario: Reglage sans retour physique
+
+- **WHEN** l'utilisateur consulte le parcours contact sec
+- **THEN** il trouve la signification des trois durees existantes et de leur point de depart
+- **AND** la documentation distingue le contact sec d'une coupure d'alimentation secteur
+- **AND** elle explique que le switch ne permet ni de confirmer la flamme ni de detecter un echec d'allumage
+
+#### Scenario: Sous-jacent input_boolean dans la documentation
+
+- **WHEN** l'utilisateur consulte la documentation du parcours `input_boolean`
+- **THEN** il trouve la distinction entre l'etat logique de l'entite et un contact physique
+- **AND** il est averti que cet etat ne confirme ni la flamme ni l'extinction effective
+
+### Requirement: Documentation de la reprise et de la responsabilite initiale
+
+La documentation FR/EN SHALL decrire la priorite aux dates restaurees exploitables, le decompte du temps d'arret de HA et l'absence d'attente sans date exploitable pour l'etat courant. Elle SHALL expliciter la responsabilite de l'utilisateur pour les manoeuvres precedant cette initialisation et ne pas presenter les temporisations comme une garantie de surete materielle.
+
+#### Scenario: Installation avec poele deja en service
+
+- **WHEN** l'utilisateur consulte les regles du premier demarrage
+- **THEN** il peut identifier que ON et OFF sont adoptes sans redemarrer artificiellement un delai
+- **AND** il est averti qu'une manoeuvre recente hors du plugin ne peut pas etre reconstituee
+
+#### Scenario: Simple arret puis relance
+
+- **WHEN** l'utilisateur consulte les regles de redemarrage avec dates exploitables
+- **THEN** la documentation annonce la conservation des echeances et non un nouveau delai complet
 
 ## Observations
 

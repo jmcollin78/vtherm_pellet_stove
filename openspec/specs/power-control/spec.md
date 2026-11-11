@@ -11,30 +11,34 @@ Le choix ON/OFF appartient a la regulation, pas a la table de niveaux.
 `delta_t = consigne - temperature`, pente en degres par heure, indices a partir
 de zero et `n` nombre de niveaux, ordonnes du plus faible au plus fort.
 
-| Intervalle de delta_t | Pente | Index calcule | Exemple avec 5 niveaux |
-| --- | --- | --- | --- |
-| `delta_t >= 2.0` | quelconque | `n - 1` | 4 |
-| `1.0 <= delta_t < 2.0` | `< 0.3` | `max(0, n - 2)` | 3 |
-| `1.0 <= delta_t < 2.0` | `>= 0.3` | `min(n - 1, n // 2 + 1)` si `n > 2`, sinon `n // 2` | 3 |
-| `0.3 <= delta_t < 1.0` | `< 0.2` | `n // 2` | 2 |
-| `0.3 <= delta_t < 1.0` | `>= 0.2` | `max(0, n // 2 - 1)` si `n > 2`, sinon `n // 2` | 1 |
-| `-0.3 <= delta_t < 0.3` | quelconque | 0 | 0 |
-| `delta_t < -0.3` | quelconque | `None` | `None` |
+| Intervalle de delta_t   | Pente      | Index calcule                                       | Exemple avec 5 niveaux |
+| ----------------------- | ---------- | --------------------------------------------------- | ---------------------- |
+| `delta_t >= 2.0`        | quelconque | `n - 1`                                             | 4                      |
+| `1.0 <= delta_t < 2.0`  | `< 0.3`    | `max(0, n - 2)`                                     | 3                      |
+| `1.0 <= delta_t < 2.0`  | `>= 0.3`   | `min(n - 1, n // 2 + 1)` si `n > 2`, sinon `n // 2` | 3                      |
+| `0.3 <= delta_t < 1.0`  | `< 0.2`    | `n // 2`                                            | 2                      |
+| `0.3 <= delta_t < 1.0`  | `>= 0.2`   | `max(0, n // 2 - 1)` si `n > 2`, sinon `n // 2`     | 1                      |
+| `-0.3 <= delta_t < 0.3` | quelconque | 0                                                   | 0                      |
+| `delta_t < -0.3`        | quelconque | `None`                                              | `None`                 |
 
 ## Requirements
 
 ### Requirement: Pilotage optionnel pendant la chauffe
 
-Le controleur SHALL calculer un niveau uniquement si le pilotage est active
-et une liste de niveaux non vide existe. Le handler SHALL envoyer ce niveau
-uniquement lorsque le controleur est en chauffe et le pilotage active.
-La desactivation SHALL ne pas desactiver l'hysteresis ni les temporisations.
+Pour un sous-jacent `climate`, le controleur SHALL calculer un niveau uniquement si le pilotage est active et une liste non vide existe ; le handler SHALL l'envoyer uniquement en chauffe et avec pilotage actif. Pour un sous-jacent binaire `switch` ou `input_boolean`, le pilotage SHALL rester effectivement desactive, quels que soient les reglages enregistres. La desactivation SHALL ne pas desactiver l'hysteresis ni les temporisations.
 
 #### Scenario: Pilotage desactive
 
 - **GIVEN** `power_control_enabled = false`
 - **WHEN** la regulation decide ON
 - **THEN** aucun niveau n'est calcule ni envoye et la decision ON reste valide
+
+#### Scenario: Sous-jacent binaire avec valeurs globales activees
+
+- **GIVEN** un sous-jacent `switch` ou `input_boolean` et `power_control_enabled = true` dans les reglages effectifs enregistres
+- **WHEN** la regulation decide ON
+- **THEN** aucun niveau de puissance n'est calcule ni envoye
+- **AND** la decision ON, l'hysteresis et les temporisations restent operationnelles
 
 ### Requirement: Validation de la liste du mapper
 
@@ -190,6 +194,41 @@ effective du pilotage ne l'invalide pas. Cela ne prouve pas l'application materi
 - **GIVEN** une chauffe active, `power_control_attribute = 'preset_mode'` et un nouvel index de valeur `'high'`
 - **WHEN** le handler applique la puissance
 - **THEN** il demande `climate.set_preset_mode` avec `preset_mode = 'high'` sur chaque sous-jacent climate
+
+### Requirement: Absence de boost de puissance sur contact sec
+
+Pour un sous-jacent binaire `switch` ou `input_boolean`, l'integration SHALL ne pas activer de boost de puissance ni exposer un niveau courant applicable, meme si le boost est configure ou restaure. Elle SHALL ne pas envoyer de commande `climate.set_fan_mode` ou `climate.set_preset_mode` pour ce parcours. L'inhibition SHALL rester effective apres une mise a jour des options sans modifier les durees ni les dates de transition.
+
+#### Scenario: input_boolean avec boost configure
+
+- **GIVEN** un sous-jacent `input_boolean` et `power_boost_enabled = true`
+- **WHEN** la consigne augmente suffisamment pour declencher un boost sur un climate
+- **THEN** aucun boost de puissance n'est actif pour le switch et aucun niveau n'est expose comme applicable
+- **AND** une hausse de consigne ne contourne pas les garde-fous ON/OFF
+
+#### Scenario: Reprise avec ancien niveau et ancien boost
+
+- **GIVEN** un sous-jacent `switch` ou `input_boolean` et un Store contenant un niveau et une echeance de boost
+- **WHEN** le runtime est restaure
+- **THEN** le diagnostic ne presente ni niveau applicable ni boost actif
+- **AND** les dates ON/OFF exploitables restent disponibles pour la reprise des temporisations
+
+#### Scenario: Options reactivees pendant la chauffe
+
+- **GIVEN** une chauffe commandee par un sous-jacent `switch` ou `input_boolean`
+- **WHEN** une mise a jour des options active la puissance et le boost
+- **THEN** ces fonctions restent inhibees pour le switch sans modification de l'echeance ON/OFF
+
+### Requirement: Conservation du pilotage de puissance climate
+
+L'ajout des sous-jacents binaires `switch` et `input_boolean` SHALL conserver pour les sous-jacents `climate` le choix optionnel du niveau, le boost, la transmission `fan_mode` ou `preset_mode` et la non-repetition d'un niveau inchange. Leur inhibition SHALL ne pas modifier les reglages enregistres ni le comportement des thermostats climate.
+
+#### Scenario: Deux thermostats partageant les reglages globaux
+
+- **GIVEN** un thermostat avec un sous-jacent `switch` ou `input_boolean` et un thermostat avec climate utilisant des reglages globaux de puissance actives
+- **WHEN** chacun demande la chauffe
+- **THEN** le sous-jacent binaire reste sans pilotage de niveau et le climate conserve son pilotage configure
+- **AND** les reglages globaux enregistres restent inchanges
 
 ## Observations
 
