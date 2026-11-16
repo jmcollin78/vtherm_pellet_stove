@@ -283,6 +283,12 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_options_schema(dict(DEFAULT_OPTIONS)),
         )
 
+    async def async_step_thermostat_options_switch(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Handle thermostat options when the underlying entity is a switch."""
+        return await self.async_step_thermostat_options(user_input)
+
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
         """Allow reconfiguring an existing entry.
 
@@ -319,6 +325,12 @@ class PelletStoveConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_options_schema(defaults),
         )
 
+    async def async_step_reconfigure_switch(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Handle reconfiguration when the underlying entity is a switch."""
+        return await self.async_step_reconfigure(user_input)
+
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return the options flow handler."""
@@ -350,3 +362,7 @@ class PelletStoveOptionsFlow(OptionsFlow):
             step_id="init_switch" if switch_underlying else "init",
             data_schema=build_options_schema(defaults),
         )
+
+    async def async_step_init_switch(self, user_input: dict[str, Any] | None = None):
+        """Handle options when the underlying entity is a switch."""
+        return await self.async_step_init(user_input)

@@ -26,6 +26,18 @@ from custom_components.vtherm_pellet_stove.config_flow import (
 )
 
 
+@pytest.mark.parametrize(
+    ("flow_class", "step_id"),
+    [
+        (PelletStoveConfigFlow, "thermostat_options_switch"),
+        (PelletStoveConfigFlow, "reconfigure_switch"),
+        (PelletStoveOptionsFlow, "init_switch"),
+    ],
+)
+def test_dry_contact_steps_have_dispatch_handlers(flow_class, step_id):
+    assert callable(getattr(flow_class, f"async_step_{step_id}", None))
+
+
 def _make_hass(monkeypatch, underlying_entities, *, state="unavailable"):
     """Build the registry and config-entry links used by the resolver."""
     target = SimpleNamespace(
